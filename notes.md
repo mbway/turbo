@@ -13,6 +13,9 @@
 - cross entropy for binary classification: `-1/n*sum(y_hat*log y + (1-y_hat)*log (1-y))`
     - when there are $k$ classes and $N$ training examples: $-\frac 1 n\sum_n^N\sum_k^K \hat Y^{(n)}_k\log_2 Y^{{n)}_k$
 
+# Things I learned about tensorflow
+- output layers can be sliced and different activation functions can be applied to different sections of it, eg to output several outputs with softmax, some more with linear etc
+
 
 # Tips for tuning hyper-parameters
-- first list out the hyperparameters to tune and potentially rule out the ones that will be kept fixed (eg like the layer activation functions
+- first list out the hyperparameters to tune and potentially rule out the ones that will be kept fixed (eg like the layer activation functions)
