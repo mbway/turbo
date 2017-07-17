@@ -1,3 +1,4 @@
+import math
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns # prettify matplotlib
@@ -160,10 +161,21 @@ class Data1D:
         self.noise = make2D(np.random.normal(0, self.s, self.n))
         self.y = self.exact_y + self.noise
 
-    def plot_samples(self):
+        # populated as booleans
+        self.populated_b = [False] * len(self.full_x)
+        for i, x in enumerate(self.full_x):
+            for dx in self.x:
+                if math.isclose(x, dx, abs_tol=1e-1):
+                    self.populated_b[i] = True
+                    break
+        self.populated = np.array([1 if p else 0 for p in self.populated_b])
+
+    def plot_samples(self, show_populated=True):
         plt.figure(figsize=(16,8))
         plt.plot(self.x, self.y, 'b.', label='data')
         plt.plot(self.full_x, self.full_exact_y, 'g-', label='generator')
+        if show_populated:
+            plt.plot(self.full_x, self.populated, 'r-', label='populated')
         plt.margins(0.1, 0.1)
         plt.legend(loc='upper left')
         plt.show()
