@@ -3,12 +3,16 @@ import time
 import json
 import os
 
-import copy
 from collections import defaultdict
 from itertools import groupby
 # dummy => not multiprocessing but fake threading, which allows access to the
 # same memory and variables
-from multiprocessing.dummy import Process
+import multiprocessing.dummy as dummy
+import sys
+if sys.version_info[0] >= 3: # python 3
+    from queue import Empty
+else:
+    from Queue import Empty
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -32,6 +36,23 @@ class dotdict(dict):
         return self[name]
     def __setattr__(self, name, val):
         self[name] = val
+    def copy(self):
+        ''' copy.copy() does not work with dotdict '''
+        return dotdict(dict.copy(self))
+
+class NumpyJSONEncoder(json.JSONEncoder):
+    '''
+    unfortunately numpy primitives are not JSON serialisable
+    '''
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        else:
+            return super(NumpyJSONEncoder, self).default(obj)
 
 def logspace(from_, to, num_per_mag=1):
     '''
@@ -42,14 +63,10 @@ def logspace(from_, to, num_per_mag=1):
     num = abs(to_exp-from_exp)*num_per_mag + 1
     return np.logspace(from_exp, to_exp, num=num, base=10)
 
-def unpack(l):
-    ''' convert from a list of tuples to a tuple of lists '''
-    return map(list, zip(*l))
-
 def time_string(seconds):
     mins, secs  = divmod(seconds, 60)
     hours, mins = divmod(mins, 60)
-    hours, mins = int(mins), int(hours)
+    hours, mins = int(hours), int(mins)
 
     # if the number of seconds would round to an integer: display it as one
     if math.isclose(round(secs), secs, abs_tol=1e-1):
@@ -64,35 +81,44 @@ def time_string(seconds):
     else:
         return '{:02d}:{}'.format(mins, secs)
 
-def config_string(config, compact=False, order=None):
+def config_string(config, order=None):
     '''
         similar to the string representation of a dictionary
     '''
+    assert order is None or (set(order) == config.keys())
     string = '{'
     order = sorted(list(config.keys())) if order is None else order
     for p in order:
         if type(config[p]) == str or type(config[p]) == np.str_:
             string += '{}="{}", '.format(p, config[p])
         else: # assuming numeric
+            # 2 significant figures
             string += '{}={:.2g}, '.format(p, config[p])
     string = string[:-2] # remove trailing comma and space
     string += '}'
     return string
 
-class Logger:
+def exception_string():
     '''
-        a class who's objects can be passed to an Optimiser. The 'log' method is
-        called with various messages from the optimiser during a run.
+    get a string formatted with the last exception
+    '''
+    import traceback
+    return ''.join(traceback.format_exception(*sys.exc_info()))
+
+class StoreLogger:
+    '''
+    A logger for Optimisers which stores the output to a string rather than printing
     '''
     def __init__(self):
         self.log_record = ''
-    def log(self, string):
-        self.log_record += string + '\n'
+    def log(self, string, newline=True):
+        self.log_record += string
+        if newline:
+            self.log_record += '\n'
     def __str__(self):
         return self.log_record
     def __repr__(self):
         return str(self)
-
 
 class Sample:
     def __init__(self, config, cost):
@@ -104,6 +130,133 @@ class Sample:
         ''' so you can write my_config, my_cost = my_sample '''
         yield self.config
         yield self.cost
+    def __eq__(self, other):
+        return self.config == other.config and self.cost == other.cost
+
+class Job:
+    '''
+    a job is a single configuration to be tested, it may result in one or
+    multiple samples being evaluated.
+    '''
+    def __init__(self, config, n):
+        self.config = config
+        self.n = n # job number
+        self.samples = None
+        self.exception = None
+        self.exception_string = None # traceback for the exception
+        self.duration = None
+    def set_results(self, samples, duration=None):
+        self.samples = samples
+        self.duration = duration
+
+class LocalEvaluator:
+    '''
+    an evaluator listens to the job queue of an optimiser and evaluates
+    configurations for it, responding with the cost for that configuration.
+
+    note: if an evaluator takes a job, it is obliged to process it before
+    shutting down, however if it obeys this then it may start and stop at will.
+
+    a LocalEvaluator runs in the same python process as the optimiser and
+    listens to the queue directly, either from a background thread or on the
+    thread it is called from.
+    '''
+    def __init__(self, optimiser):
+        '''
+        optimiser: an Optimiser object to poll jobs from
+        '''
+        self.optimiser = optimiser
+        self.proc = None
+        self.start_time = None
+        self.done = False # flag to quit
+        self.log_record = ''
+
+    def start(self, run_async=True):
+        '''
+        note: must start the optimiser before starting the evaluator
+        '''
+        assert self.proc is None
+        assert self.optimiser.running # must start optimiser first
+        self.done = False
+        self.log('started')
+        self.start_time = time.time()
+        if run_async:
+            self.proc = dummy.Process(target=self._poll_jobs, args=[])
+            self.proc.start()
+        else:
+            self._poll_jobs()
+
+    def stop(self):
+        print('stopping evaluator')
+        self.done = True
+        if self.proc is not None:
+            self.proc.join()
+            self.proc = None
+        self.start_time = None
+        self.log('stopped')
+        print('stopped')
+
+    def wait_for(self):
+        self.proc.join()
+        self.proc = None
+
+    def log(self, string, newline=True):
+        self.log_record += string
+        if newline:
+            self.log_record += '\n'
+
+    def monitor(self):
+        while not self.done:
+            print('running for {}'.format(time_string(time.time()-self.start_time)))
+            print('-'*25)
+            print(self.log_record)
+            time.sleep(1)
+            clear_output(wait=True)
+        clear_output(wait=True)
+        print('not running')
+        print('-'*25)
+        print(self.log_record)
+
+    def _poll_jobs(self):
+        while not self.done and self.optimiser.running:
+            try:
+                job = self.optimiser.job_queue.get_nowait()
+                self.log('received job {}'.format(job.n))
+                start_time = time.time()
+                try:
+                    results = self.test_config(job.config)
+                except Exception as e:
+                    job.exception = e
+                    job.exception_string = exception_string()
+                    self.log('Exception Raised: {}'.format(job.exception_string))
+                    self.optimiser.result_queue.put(job)
+                    continue
+                # evaluator can return either a list of samples, or just a cost
+                samples = results if isinstance(results, list) else [Sample(job.config, results)]
+                job.set_results(samples, duration=time.time()-start_time)
+                self.log('returning results of job {}: samples={}'.format(job.n, job.samples))
+                self.optimiser.result_queue.put(job)
+            except Empty: # job_queue empty
+                time.sleep(0.1)
+                continue
+        if self.done:
+            self.log('stopped because of an interruption')
+        elif not self.optimiser.running:
+            self.log('stopped because the optimiser is no longer running')
+        else:
+            self.log('stopped for an unknown reason')
+        self.done = True
+
+    def test_config(self, config):
+        '''
+        given a configuration, evaluate and return its cost. Can also test
+        multiple configurations based on the given config and return a list of
+        Sample objects (eg could run multiple times if there is some randomness,
+        or could introduce another parameter which is cheap to test)
+
+        config: dictionary of parameter names to values
+        '''
+        raise NotImplemented
 
 class Optimiser:
     '''
@@ -112,21 +265,25 @@ class Optimiser:
 
     Importantly: an expression for the cost function is not required
     '''
-    def __init__(self, ranges, test_config, logger=None):
+    def __init__(self, ranges, logger=None):
         '''
-        ranges: dictionary of parameter names and their ranges (np.linspace or np.logspace)
-        test_config: function for evaluating a configuration (returning its cost)
-            configuration: dictionary of parameter names to values
+        ranges: dictionary of parameter names and their ranges (numpy arrays, can be created by np.linspace or np.logspace)
         logger: a function which takes a string to be logged and does as it wishes with it
         '''
         self.ranges = dotdict(ranges)
-        self.order = list(ranges.keys())
-        self.test_config = test_config # function to evaluate a configuration
+
+        # both queues hold Job objects, with the result queue having jobs with 'cost' filled out
+        #TODO max_size as an argument
+        self.job_queue = dummy.Queue(maxsize=4)
+        self.result_queue = dummy.Queue()
+
         # the configurations that have been tested (list of `Sample` objects)
         self.samples = []
+        # may not be equal to len(self.samples) because the evaluator can evaluate multiple configurations at once
+        self.num_processed_jobs = 0
 
-        self.logger = logger if logger is not None else Logger()
-        self.log = self.logger.log
+        self.logger = logger if logger is not None else StoreLogger()
+        self._log = self.logger.log
 
         self.running = False
         self.proc = None # handle for the process used for asynchronous execution
@@ -144,7 +301,7 @@ class Optimiser:
         '''
         assert self.proc is None
         if run_async:
-            self.proc = Process(target=self._run, args=[])
+            self.proc = dummy.Process(target=self._safe_run, args=[])
             self.proc.start()
         else:
             self._run()
@@ -156,13 +313,17 @@ class Optimiser:
         if not self.running:
             print('already stopped')
         else:
-            print('stopping...')
+            print('stopping optimiser...')
             self.done = True
             if self.proc: # running asynchronously
                 self.proc.join()
             print('stopped.')
 
-    def wait_for(self, watch_log=True, stop_if_interrupted=True):
+    def wait_for(self):
+        self.proc.join()
+        self.proc = None
+
+    def monitor(self, watch_log=True, stop_if_interrupted=True):
         '''
         wait for the optimisation run to finish. (useful for monitoring an asynchronous run)
         watch_log: whether to print the log contents while waiting
@@ -174,9 +335,6 @@ class Optimiser:
             else:
                 ticks = 0
                 while not self.done:
-                    clear_output(wait=True)
-                    time.sleep(1)
-
                     self.report()
                     print('-'*25)
 
@@ -185,6 +343,10 @@ class Optimiser:
                     else:
                         print('still running' + ('.'*(ticks%3)))
                         ticks += 1
+
+                    time.sleep(1)
+                    clear_output(wait=True)
+
 
                 clear_output(wait=True)
                 print('optimiser finished.')
@@ -218,52 +380,79 @@ class Optimiser:
             total *= len(param_range)
         return total
 
+    def _safe_run(self):
+        try:
+            self._run()
+        except Exception as e:
+            self._log('Exception raised during run: {}'.format(exception_string()))
+            self.interrupt()
+
     def _run(self):
         assert not self.running
         self.done = False
         self.running = True
         self.run_start = time.time()
-        self.log('starting optimisation...')
+        self._log('starting optimisation...')
         best = self.best_known_sample()
         current_best = best.cost if best is not None else math.inf # current best cost
-        n = len(self.samples)+1 # sample number
+        n = self.num_processed_jobs+1 # sample number, 1-based
 
-        config = self._next_configuration()
-        while config is not None:
-            config = dotdict(config)
-            sample_start_time = time.time()
-            try:
-                cost = self.test_config(config)
-            except Exception as e:
-                self.log('exception raised during evaluation: {}({})'.format(str(type(e)), str(e)))
-                self.done = True
-                break
-            dur = time.time()-sample_start_time
+        outstanding_jobs = 0 # the number of jobs added to the queue that have not yet been processed
+        out_of_configs = False # whether there are no more configurations available from _next_configuration()
 
-            self.log('sample={:03}, time={}, config={}, cost={:.2g} {}'.format(
-                n, time_string(dur),
-                config_string(config, self.order), cost,
-                ('(current best)' if cost < current_best else '')
-            ))
-
-            if cost < current_best:
-                current_best = cost
-            self.samples.append(Sample(config, cost))
-            if self.done:
-                break
-            else:
+        while True:
+            # add new jobs
+            while not self.job_queue.full() and not out_of_configs:
                 config = self._next_configuration()
-            n += 1
+                if config is None:
+                    self._log('out of configurations')
+                    out_of_configs = True
+                    break # finish processing the outstanding jobs
+                job = Job(dotdict(config), n)
+                n += 1
+                self.job_queue.put(job)
+                outstanding_jobs += 1
+                self._log('job {} added to queue'.format(job.n))
+
+            # process results
+            while not self.result_queue.empty():
+                job = self.result_queue.get()
+
+                if job.exception is not None:
+                    self._log('exception raised during evaluation: {}({})\n{}'.format(
+                        str(type(job.exception)), str(job.exception), job.exception_string))
+                    self.done = True
+                    break # stop running
+
+                for i, s in enumerate(job.samples):
+                    self._log('job={:03}, job_time={}, sample {:02}: config={}, cost={:.2g}{}'.format(
+                        job.n, time_string(job.duration), i,
+                        config_string(s.config), s.cost,
+                        (' (current best)' if s.cost < current_best else '')
+                    ))
+
+                    if s.cost < current_best:
+                        current_best = s.cost
+                self.samples.extend(job.samples)
+                self.num_processed_jobs += 1 # regardless of how many samples
+                outstanding_jobs -= 1
+
+            if self.done or (out_of_configs and outstanding_jobs == 0):
+                break
+
+            time.sleep(0.5)
 
         if self.done:
-            self.log('optimisation interrupted and shut down gracefully')
+            self._log('optimisation interrupted and shut down gracefully')
+        elif out_of_configs and outstanding_jobs == 0:
+            self._log('optimisation finished.')
         else:
-            self.log('optimisation finished.')
+            self._log('stopped for an unknown reason.')
+
         self.done = True
         dur = time.time()-self.run_start
         self.duration += dur
-        self.log('total time taken: {} ({} this run)'.format(time_string(self.duration), time_string(dur)))
-        self.proc = None
+        self._log('total time taken: {} ({} this run)'.format(time_string(self.duration), time_string(dur)))
         self.running = False
 
 
@@ -282,16 +471,15 @@ class Optimiser:
         dur = self.duration + current_dur
         if self.running:
             print('currently running (has been for {}).'.format(time_string(current_dur)))
-        samples_tested = len(self.samples)
         samples_total = self.total_samples()
-        percent_progress = samples_tested/float(samples_total)*100.0
+        percent_progress = self.num_processed_jobs/float(samples_total)*100.0
         print('{} of {} samples ({:.1f}%) taken in {}.'.format(
-            samples_tested, samples_total, percent_progress, time_string(dur)))
+            self.num_processed_jobs, samples_total, percent_progress, time_string(dur)))
         best = self.best_known_sample()
         if best is None:
             print('no best configuration known')
         else:
-            print('best known configuration:\n{}'.format(config_string(best.config, self.order)))
+            print('best known configuration:\n{}'.format(config_string(best.config)))
             print('cost of the best known configuration:\n{}'.format(best.cost))
 
 # Plotting and Plotting Utilities
@@ -318,9 +506,13 @@ class Optimiser:
             data.append((val, list(samples)))
         return data
 
-    def plot_param(self, param_name, plot_boxplot=True, plot_samples=True, plot_means=True):
+    def plot_param(self, param_name, plot_boxplot=True, plot_samples=True, plot_means=True, log_cost=False):
         '''
         plot a boxplot of parameter values against cost
+        plot_boxplot: whether to plot boxplots
+        plot_samples: whether to plot each sample as a point
+        plot_means: whether to plot a line through the mean costs
+        log_cost: whether to display the cost axis with a logarithmic scale
         '''
         values = []
         costs = []
@@ -345,12 +537,15 @@ class Optimiser:
         plt.margins(0.1, 0.1)
         plt.xlabel('parameter: ' + param_name)
         plt.ylabel('cost')
-        plt.yscale('log')
+        if log_cost:
+            plt.yscale('log')
         plt.show()
 
-    def scatter_plot(self, param_a, param_b, interactive=True, color_by='cost'):
+    def scatter_plot(self, param_a, param_b, interactive=True, color_by='cost', log_cost=False):
         '''
+            interactive: whether to display a slider for changing the number of samples to display
             color_by: either 'cost' or 'age'
+            log_cost: whether to display the cost axis with a logarithmic scale
         '''
         assert color_by in ['cost', 'age']
 
@@ -359,16 +554,16 @@ class Optimiser:
             xs.append(s.config[param_a])
             ys.append(s.config[param_b])
             costs.append(s.cost)
-            texts.append('sample {:03}, config: {}, cost: {}'.format(i+1, config_string(s.config, compact=True), s.cost))
+            texts.append('sample {:03}, config: {}, cost: {}'.format(i+1, config_string(s.config), s.cost))
 
         xs, ys, costs, texts = map(np.array, (xs, ys, costs, texts))
         color = 'z' if color_by == 'cost' else 'age'
         axes_names = ['param: ' + param_a, 'param: ' + param_b, 'cost']
 
         plot3D.scatter3D(xs, ys, costs, interactive=interactive, color_by=color,
-                        markersize=8, tooltips=texts, axes_names=axes_names)
+                        markersize=8, tooltips=texts, axes_names=axes_names, z_log=log_cost)
 
-    def surface_plot(self, param_a, param_b):
+    def surface_plot(self, param_a, param_b, log_cost=False):
         '''
         plot the surface of different values of param_a and param_b and how they
         affect the cost (z-axis). If there are multiple configurations with the
@@ -381,6 +576,8 @@ class Optimiser:
 
         If there are gaps where a param_a,param_b combination has not yet been
         evaluated, the cost for that point will be 0.
+
+        log_cost: whether to display the cost axis with a logarithmic scale
         '''
         # get all the x and y values found in any of the samples (may not equal self.ranges[...])
         xs = np.array(sorted(set([val for val, samples in self.group_by_param(param_a)])))
@@ -390,12 +587,12 @@ class Optimiser:
         for val, samples_for_val in self.group_by_params(param_a, param_b):
             sample = min(samples_for_val, key=lambda s: s.cost)
             costs[val] = sample.cost
-            texts[val] = 'config: {}, cost: {}'.format(config_string(sample.config, compact=True), sample.cost)
+            texts[val] = 'config: {}, cost: {}'.format(config_string(sample.config), sample.cost)
         xs, ys = np.meshgrid(xs, ys)
         costs = np.vectorize(lambda x,y: costs[(x,y)])(xs, ys)
         texts = np.vectorize(lambda x,y: texts[(x,y)])(xs, ys)
         axes_names = ['param: ' + param_a, 'param: ' + param_b, 'cost']
-        plot3D.surface3D(xs, ys, costs, tooltips=texts, axes_names=axes_names)
+        plot3D.surface3D(xs, ys, costs, tooltips=texts, axes_names=axes_names, z_log=log_cost)
 
 # Saving and Loading Progress
 
@@ -410,7 +607,7 @@ class Optimiser:
             raise Exception('File "{}" already exists!'.format(filename))
         else:
             with open(filename, 'w') as f:
-                f.write(json.dumps(self._save_dict(), indent=4))
+                f.write(json.dumps(self._save_dict(), indent=4, cls=NumpyJSONEncoder))
 
     def load_progress(self, filename):
         '''
@@ -431,6 +628,7 @@ class Optimiser:
             best = Sample({}, math.inf)
         return {
             'samples' : [(s.config, s.cost) for s in self.samples],
+            'num_processed_jobs' : self.num_processed_jobs,
             'duration' : self.duration,
             'log' : self.logger.log_record,
             'best_sample' : {'config' : best.config, 'cost' : best.cost}
@@ -442,6 +640,7 @@ class Optimiser:
         (designed to be overridden by derived classes in order to load specialised data)
         '''
         self.samples = [Sample(dotdict(config), cost) for config, cost in save['samples']]
+        self.num_processed_jobs = save['num_processed_jobs']
         self.duration = save['duration']
         self.logger.log_record = save['log']
 
@@ -451,13 +650,13 @@ class GridSearchOptimiser(Optimiser):
         Grid search optimisation strategy: search with some step size over each
         dimension to find the best configuration
     '''
-    def __init__(self, ranges, test_config, logger=None, order=None):
+    def __init__(self, ranges, logger=None, order=None):
         '''
         order: the precedence/importance of the parameters (or None for default)
             appearing earlier => more 'primary' (changes more often)
             default could be any order
         '''
-        super(GridSearchOptimiser, self).__init__(ranges, test_config, logger)
+        super(GridSearchOptimiser, self).__init__(ranges, logger)
         self.order = list(ranges.keys()) if order is None else order
         assert set(self.order) == set(ranges.keys())
         # start at the lower boundary for each parameter
@@ -512,7 +711,7 @@ class RandomSearchOptimiser(Optimiser):
         parameters until either a certain number of samples are taken or all
         combinations have been tested.
     '''
-    def __init__(self, ranges, test_config, logger=None, allow_re_tests=False, max_samples=math.inf, max_retries=10000):
+    def __init__(self, ranges, logger=None, allow_re_tests=False, max_samples=math.inf, max_retries=10000):
         '''
         allow_re_tests: whether a configuration should be tested again if it has
             already been tested. This might be desirable if the cost for a
@@ -526,7 +725,7 @@ class RandomSearchOptimiser(Optimiser):
             before giving up (to exhaustively explore the parameter space,
             perhaps finish off with a grid search?)
         '''
-        super(RandomSearchOptimiser, self).__init__(ranges, test_config, logger)
+        super(RandomSearchOptimiser, self).__init__(ranges, logger)
         self.allow_re_tests = allow_re_tests
         self.tested_configurations = set()
         self.max_samples = max_samples
@@ -541,10 +740,12 @@ class RandomSearchOptimiser(Optimiser):
         of already tested ones. `dict` is not hashable. This is slightly hacky
         but should work so long as the parameters have __str__ methods
         '''
-        return '|'.join([str(config[param]) for param in sorted(config.keys())])
+        # only use parameters relevant to the optimiser, ie the ones from ranges.keys()
+        # (evaluators may introduce new parameters to a configuration)
+        return '|'.join([str(config[param]) for param in sorted(self.ranges.keys())])
 
     def _next_configuration(self):
-        if len(self.samples) >= self.max_samples:
+        if self.num_processed_jobs >= self.max_samples:
             return None # done
         else:
             c = self._random_config()
@@ -554,7 +755,7 @@ class RandomSearchOptimiser(Optimiser):
                     c = self._random_config()
                     attempts += 1
                 if attempts >= self.max_retries:
-                    self.log('max number of retries ({}) exceeded, most of the parameter space must have been explored. Quitting...'.format(self.max_retries))
+                    self._log('max number of retries ({}) exceeded, most of the parameter space must have been explored. Quitting...'.format(self.max_retries))
                     return None # done
                 self.tested_configurations.add(self._hash_config(c))
             return c
@@ -563,4 +764,37 @@ class RandomSearchOptimiser(Optimiser):
         super(RandomSearchOptimiser, self)._load_dict(save)
         if not self.allow_re_tests:
             self.tested_configurations = set([self._hash_config(s.config) for s in self.samples])
+
+
+
+def monitor_to_file(optimiser, evaluator):
+    '''
+    A helper function to monitor the logs of the optimiser and LocalEvaluator
+    and redirect them to files in /tmp
+    '''
+    op_file = '/tmp/optimiser.log'
+    ev_file = '/tmp/evaluator.log'
+    print('logging to:')
+    print(op_file)
+    print(ev_file)
+    with open(op_file, 'w') as o, open(ev_file, 'w') as e:
+        try:
+            while optimiser.running or not evaluator.done:
+                # offset=0, whence=0 => absolute from beginning
+                o.seek(0, 0)
+                o.write(str(optimiser.logger))
+                o.flush()
+
+                e.seek(0, 0)
+                e.write(evaluator.log_record)
+                e.flush()
+
+                time.sleep(1)
+            print('both the optimiser and evaluator have stopped')
+        except KeyboardInterrupt:
+            print('interrupt caught, monitoring has stopped')
+        finally:
+            message = '\n\n--NO LONGER MONITORING--'
+            o.write(message)
+            e.write(message)
 

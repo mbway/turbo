@@ -3,17 +3,28 @@ import plotly.graph_objs as go
 import matplotlib.pyplot as plt
 import ipywidgets as widgets
 
+def running_in_ipython():
+    try:
+        __IPYTHON__
+        return True
+    except NameError:
+        return False
 # connected = whether to use CDN or load offline from the version stored in the
 # python module
-py.init_notebook_mode(connected=False)
+if running_in_ipython():
+    print('setting up plotly for ipython')
+    py.init_notebook_mode(connected=False)
 
-def surface3D(x, y, z, tooltips=None, axes_names=['x','y','z']):
+def surface3D(x, y, z, tooltips=None, axes_names=['x','y','z'], z_log=False):
     '''
     parameters should be of the form:
     X = np.arange(...)
     Y = np.arange(...)
     X, Y = np.meshgrid(X, Y)
     Z = f(X,Y)
+
+    tooltips: an array with the same length as the number of points, containing a string to display beside them
+    z_log: whether the z axis should have a logarithmic scale (False => linear)
     '''
     data = [go.Surface(
         x=x, y=y, z=z,
@@ -28,17 +39,20 @@ def surface3D(x, y, z, tooltips=None, axes_names=['x','y','z']):
         scene=dict(
             xaxis=dict(title=axes_names[0]),
             yaxis=dict(title=axes_names[1]),
-            zaxis=dict(title=axes_names[2]),
+            zaxis=dict(title=axes_names[2], type='log' if z_log else None),
         )
     )
     fig = go.Figure(data=data, layout=layout)
     # show_link is a link to export to the 'plotly cloud'
     py.iplot(fig, show_link=False)
 
-def scatter3D(x,y,z, interactive=False, color_by='z', markersize=5, tooltips=None, axes_names=['x','y','z']):
+def scatter3D(x,y,z, interactive=False, color_by='z', markersize=5, tooltips=None, axes_names=['x','y','z'], z_log=False):
     '''
-        color_by can be one of: 'z', 'age'
-            'age' colors by the index (so the age of the sample)
+    interactive: whether to display an interactive slider to choose how many points to display
+    color_by: can be one of: 'z', 'age'
+        'age' colors by the index (so the age of the sample)
+    tooltips: an array with the same length as the number of points, containing a string to display beside them
+    z_log: whether the z axis should have a logarithmic scale (False => linear)
     '''
     # from https://plot.ly/python/sliders/
     x,y,z = x.flatten(), y.flatten(), z.flatten()
@@ -72,7 +86,7 @@ def scatter3D(x,y,z, interactive=False, color_by='z', markersize=5, tooltips=Non
         scene=dict(
             xaxis=dict(title=axes_names[0]),
             yaxis=dict(title=axes_names[1]),
-            zaxis=dict(title=axes_names[2], type='log')
+            zaxis=dict(title=axes_names[2], type='log' if z_log else None)
         )
     )
     fig = go.Figure(data=data, layout=layout)
