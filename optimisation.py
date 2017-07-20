@@ -1,4 +1,3 @@
-import math
 import time
 import json
 import os
@@ -9,10 +8,16 @@ from itertools import groupby
 # same memory and variables
 import multiprocessing.dummy as dummy
 import sys
-if sys.version_info[0] >= 3: # python 3
+if sys.version_info[0] == 3: # python 3
     from queue import Empty
-else:
+    from math import isclose, inf
+elif sys.version_info[0] == 2: # python 2
     from Queue import Empty
+    inf = float('inf')
+    def isclose(a, b, rel_tol=1e-09, abs_tol=0.0):
+        return abs(a-b) <= max(rel_tol * max(abs(a), abs(b)), abs_tol)
+else:
+    print('unsupported python version')
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -69,7 +74,7 @@ def time_string(seconds):
     hours, mins = int(hours), int(mins)
 
     # if the number of seconds would round to an integer: display it as one
-    if math.isclose(round(secs), secs, abs_tol=1e-1):
+    if isclose(round(secs), secs, abs_tol=1e-1):
         secs = '{:02d}'.format(int(secs))
     else:
         # 04 => pad with leading zeros up to a total length of 4 characters (including the decimal point)
@@ -105,7 +110,7 @@ def exception_string():
     import traceback
     return ''.join(traceback.format_exception(*sys.exc_info()))
 
-class StoreLogger:
+class StoreLogger(object):
     '''
     A logger for Optimisers which stores the output to a string rather than printing
     '''
@@ -120,7 +125,7 @@ class StoreLogger:
     def __repr__(self):
         return str(self)
 
-class Sample:
+class Sample(object):
     def __init__(self, config, cost):
         self.config = config
         self.cost = cost
@@ -133,7 +138,7 @@ class Sample:
     def __eq__(self, other):
         return self.config == other.config and self.cost == other.cost
 
-class Job:
+class Job(object):
     '''
     a job is a single configuration to be tested, it may result in one or
     multiple samples being evaluated.
@@ -149,7 +154,7 @@ class Job:
         self.samples = samples
         self.duration = duration
 
-class LocalEvaluator:
+class LocalEvaluator(object):
     '''
     an evaluator listens to the job queue of an optimiser and evaluates
     configurations for it, responding with the cost for that configuration.
@@ -197,8 +202,12 @@ class LocalEvaluator:
         print('stopped')
 
     def wait_for(self):
-        self.proc.join()
-        self.proc = None
+        if self.proc is None:
+            print('evaluator already finished')
+        else:
+            self.proc.join()
+            self.proc = None
+            print('evaluator finished')
 
     def log(self, string, newline=True):
         self.log_record += string
@@ -258,7 +267,7 @@ class LocalEvaluator:
         '''
         raise NotImplemented
 
-class Optimiser:
+class Optimiser(object):
     '''
     given a search space and a function to call in order to evaluate the cost at
     a given location, find the minimum of the function in the search space.
@@ -274,7 +283,7 @@ class Optimiser:
 
         # both queues hold Job objects, with the result queue having jobs with 'cost' filled out
         #TODO max_size as an argument
-        self.job_queue = dummy.Queue(maxsize=4)
+        self.job_queue = dummy.Queue(maxsize=10)
         self.result_queue = dummy.Queue()
 
         # the configurations that have been tested (list of `Sample` objects)
@@ -303,6 +312,8 @@ class Optimiser:
         if run_async:
             self.proc = dummy.Process(target=self._safe_run, args=[])
             self.proc.start()
+            while not self.running:
+                time.sleep(0.01)
         else:
             self._run()
 
@@ -320,8 +331,12 @@ class Optimiser:
             print('stopped.')
 
     def wait_for(self):
-        self.proc.join()
-        self.proc = None
+        if self.proc is None:
+            print('optimiser already finished')
+        else:
+            self.proc.join()
+            self.proc = None
+            print('optimiser finished')
 
     def monitor(self, watch_log=True, stop_if_interrupted=True):
         '''
@@ -385,16 +400,17 @@ class Optimiser:
             self._run()
         except Exception as e:
             self._log('Exception raised during run: {}'.format(exception_string()))
-            self.interrupt()
+            self.done = True
+            self.running = False
 
     def _run(self):
         assert not self.running
-        self.done = False
         self.running = True
+        self.done = False
         self.run_start = time.time()
         self._log('starting optimisation...')
         best = self.best_known_sample()
-        current_best = best.cost if best is not None else math.inf # current best cost
+        current_best = best.cost if best is not None else inf # current best cost
         n = self.num_processed_jobs+1 # sample number, 1-based
 
         outstanding_jobs = 0 # the number of jobs added to the queue that have not yet been processed
@@ -440,7 +456,7 @@ class Optimiser:
             if self.done or (out_of_configs and outstanding_jobs == 0):
                 break
 
-            time.sleep(0.5)
+            time.sleep(0.05)
 
         if self.done:
             self._log('optimisation interrupted and shut down gracefully')
@@ -449,10 +465,10 @@ class Optimiser:
         else:
             self._log('stopped for an unknown reason.')
 
-        self.done = True
         dur = time.time()-self.run_start
         self.duration += dur
         self._log('total time taken: {} ({} this run)'.format(time_string(self.duration), time_string(dur)))
+        self.done = True
         self.running = False
 
 
@@ -506,13 +522,13 @@ class Optimiser:
             data.append((val, list(samples)))
         return data
 
-    def plot_param(self, param_name, plot_boxplot=True, plot_samples=True, plot_means=True, log_cost=False):
+    def plot_param(self, param_name, plot_boxplot=True, plot_samples=True, plot_means=True, log_axes=(False,False), widths=None):
         '''
         plot a boxplot of parameter values against cost
         plot_boxplot: whether to plot boxplots
         plot_samples: whether to plot each sample as a point
         plot_means: whether to plot a line through the mean costs
-        log_cost: whether to display the cost axis with a logarithmic scale
+        log_axes: (xaxis,yaxis) whether to display the axes with a logarithmic scale
         '''
         values = []
         costs = []
@@ -537,15 +553,18 @@ class Optimiser:
         plt.margins(0.1, 0.1)
         plt.xlabel('parameter: ' + param_name)
         plt.ylabel('cost')
-        if log_cost:
+        if log_axes[0]:
+            plt.xscale('log')
+        if log_axes[1]:
             plt.yscale('log')
+        plt.autoscale(True)
         plt.show()
 
-    def scatter_plot(self, param_a, param_b, interactive=True, color_by='cost', log_cost=False):
+    def scatter_plot(self, param_a, param_b, interactive=True, color_by='cost', log_axes=(False,False,False)):
         '''
             interactive: whether to display a slider for changing the number of samples to display
             color_by: either 'cost' or 'age'
-            log_cost: whether to display the cost axis with a logarithmic scale
+            log_axes: whether to display the x,y,z axes with a logarithmic scale
         '''
         assert color_by in ['cost', 'age']
 
@@ -561,9 +580,9 @@ class Optimiser:
         axes_names = ['param: ' + param_a, 'param: ' + param_b, 'cost']
 
         plot3D.scatter3D(xs, ys, costs, interactive=interactive, color_by=color,
-                        markersize=8, tooltips=texts, axes_names=axes_names, z_log=log_cost)
+                        markersize=4, tooltips=texts, axes_names=axes_names, log_axes=log_axes)
 
-    def surface_plot(self, param_a, param_b, log_cost=False):
+    def surface_plot(self, param_a, param_b, log_axes=(False,False,False)):
         '''
         plot the surface of different values of param_a and param_b and how they
         affect the cost (z-axis). If there are multiple configurations with the
@@ -577,7 +596,7 @@ class Optimiser:
         If there are gaps where a param_a,param_b combination has not yet been
         evaluated, the cost for that point will be 0.
 
-        log_cost: whether to display the cost axis with a logarithmic scale
+        log_axes: whether to display the x,y,z axes with a logarithmic scale
         '''
         # get all the x and y values found in any of the samples (may not equal self.ranges[...])
         xs = np.array(sorted(set([val for val, samples in self.group_by_param(param_a)])))
@@ -592,7 +611,7 @@ class Optimiser:
         costs = np.vectorize(lambda x,y: costs[(x,y)])(xs, ys)
         texts = np.vectorize(lambda x,y: texts[(x,y)])(xs, ys)
         axes_names = ['param: ' + param_a, 'param: ' + param_b, 'cost']
-        plot3D.surface3D(xs, ys, costs, tooltips=texts, axes_names=axes_names, z_log=log_cost)
+        plot3D.surface3D(xs, ys, costs, tooltips=texts, axes_names=axes_names, log_axes=log_axes)
 
 # Saving and Loading Progress
 
@@ -625,7 +644,7 @@ class Optimiser:
         '''
         best = self.best_known_sample()
         if best is None:
-            best = Sample({}, math.inf)
+            best = Sample({}, inf)
         return {
             'samples' : [(s.config, s.cost) for s in self.samples],
             'num_processed_jobs' : self.num_processed_jobs,
@@ -656,7 +675,7 @@ class GridSearchOptimiser(Optimiser):
             appearing earlier => more 'primary' (changes more often)
             default could be any order
         '''
-        super(GridSearchOptimiser, self).__init__(ranges, logger)
+        super(self.__class__, self).__init__(ranges, logger)
         self.order = list(ranges.keys()) if order is None else order
         assert set(self.order) == set(ranges.keys())
         # start at the lower boundary for each parameter
@@ -695,13 +714,13 @@ class GridSearchOptimiser(Optimiser):
             return cur
 
     def _save_dict(self):
-        save = super(GridSearchOptimiser, self)._save_dict()
+        save = super(self.__class__, self)._save_dict()
         save['progress'] = self.progress
         save['progress_overflow'] = self.progress_overflow
         return save
 
     def _load_dict(self, save):
-        super(GridSearchOptimiser, self)._load_dict(save)
+        super(self.__class__, self)._load_dict(save)
         self.progress = save['progress']
         self.progress_overflow = save['progress_overflow']
 
@@ -711,7 +730,7 @@ class RandomSearchOptimiser(Optimiser):
         parameters until either a certain number of samples are taken or all
         combinations have been tested.
     '''
-    def __init__(self, ranges, logger=None, allow_re_tests=False, max_samples=math.inf, max_retries=10000):
+    def __init__(self, ranges, logger=None, allow_re_tests=False, max_samples=inf, max_retries=10000):
         '''
         allow_re_tests: whether a configuration should be tested again if it has
             already been tested. This might be desirable if the cost for a
@@ -725,7 +744,7 @@ class RandomSearchOptimiser(Optimiser):
             before giving up (to exhaustively explore the parameter space,
             perhaps finish off with a grid search?)
         '''
-        super(RandomSearchOptimiser, self).__init__(ranges, logger)
+        super(self.__class__, self).__init__(ranges, logger)
         self.allow_re_tests = allow_re_tests
         self.tested_configurations = set()
         self.max_samples = max_samples
@@ -761,7 +780,7 @@ class RandomSearchOptimiser(Optimiser):
             return c
 
     def _load_dict(self, save):
-        super(RandomSearchOptimiser, self)._load_dict(save)
+        super(self.__class__, self)._load_dict(save)
         if not self.allow_re_tests:
             self.tested_configurations = set([self._hash_config(s.config) for s in self.samples])
 

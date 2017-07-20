@@ -1,7 +1,18 @@
-import math
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns # prettify matplotlib
+
+import sys
+if sys.version_info[0] == 3: # python 3
+    from queue import Empty
+    from math import isclose, inf
+elif sys.version_info[0] == 2: # python 2
+    from Queue import Empty
+    inf = float('inf')
+    def isclose(a, b, rel_tol=1e-09, abs_tol=0.0):
+        return abs(a-b) <= max(rel_tol * max(abs(a), abs(b)), abs_tol)
+else:
+    print('unsupported python version')
 
 def make2D(arr):
     ''' convert a numpy array with shape (l,) into an array with shape (l,1)
@@ -165,10 +176,20 @@ class Data1D:
         self.populated_b = [False] * len(self.full_x)
         for i, x in enumerate(self.full_x):
             for dx in self.x:
-                if math.isclose(x, dx, abs_tol=1e-1):
+                if isclose(x, dx, abs_tol=1e-1):
                     self.populated_b[i] = True
                     break
         self.populated = np.array([1 if p else 0 for p in self.populated_b])
+
+        # Jeremy says this has no theoretical grounding :(
+        '''
+        # larger noise
+        big_noise = make2D(np.random.normal(0, self.s*4, len(self.full_x)))
+        small_noise = make2D(np.random.normal(0, self.s, len(self.full_x)))
+        self.big_noise = [small_noise[i] if self.populated_b[i] else big_noise[i] for i in range(len(self.full_x))]
+        self.full_noisy_y = self.full_exact_y + self.big_noise
+        '''
+
 
     def plot_samples(self, show_populated=True):
         plt.figure(figsize=(16,8))
@@ -179,3 +200,4 @@ class Data1D:
         plt.margins(0.1, 0.1)
         plt.legend(loc='upper left')
         plt.show()
+
