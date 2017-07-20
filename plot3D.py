@@ -1,7 +1,6 @@
+# Plotly imports
 import plotly.offline as py
 import plotly.graph_objs as go
-import matplotlib.pyplot as plt
-import ipywidgets as widgets
 
 def running_in_ipython():
     try:
@@ -13,9 +12,14 @@ def running_in_ipython():
 # python module
 if running_in_ipython():
     print('setting up plotly for ipython')
-    py.init_notebook_mode(connected=False)
+    py.init_notebook_mode(connected=True)
 
-def surface3D(x, y, z, tooltips=None, axes_names=['x','y','z'], z_log=False):
+# Other imports
+import ipywidgets as widgets
+import matplotlib.pyplot as plt
+
+
+def surface3D(x, y, z, tooltips=None, axes_names=['x','y','z'], log_axes=(False,False,False)):
     '''
     parameters should be of the form:
     X = np.arange(...)
@@ -24,7 +28,7 @@ def surface3D(x, y, z, tooltips=None, axes_names=['x','y','z'], z_log=False):
     Z = f(X,Y)
 
     tooltips: an array with the same length as the number of points, containing a string to display beside them
-    z_log: whether the z axis should have a logarithmic scale (False => linear)
+    log_axes: whether the x,y,z axes should have a logarithmic scale (False => linear)
     '''
     data = [go.Surface(
         x=x, y=y, z=z,
@@ -37,16 +41,16 @@ def surface3D(x, y, z, tooltips=None, axes_names=['x','y','z'], z_log=False):
         height=600,
         margin=dict(l=0, r=0, b=0, t=0),
         scene=dict(
-            xaxis=dict(title=axes_names[0]),
-            yaxis=dict(title=axes_names[1]),
-            zaxis=dict(title=axes_names[2], type='log' if z_log else None),
+            xaxis=dict(title=axes_names[0], type='log' if log_axes[0] else None),
+            yaxis=dict(title=axes_names[1], type='log' if log_axes[1] else None),
+            zaxis=dict(title=axes_names[2], type='log' if log_axes[2] else None),
         )
     )
     fig = go.Figure(data=data, layout=layout)
     # show_link is a link to export to the 'plotly cloud'
     py.iplot(fig, show_link=False)
 
-def scatter3D(x,y,z, interactive=False, color_by='z', markersize=5, tooltips=None, axes_names=['x','y','z'], z_log=False):
+def scatter3D(x,y,z, interactive=False, color_by='z', markersize=5, tooltips=None, axes_names=['x','y','z'], log_axes=(False,False,False)):
     '''
     interactive: whether to display an interactive slider to choose how many points to display
     color_by: can be one of: 'z', 'age'
@@ -84,9 +88,9 @@ def scatter3D(x,y,z, interactive=False, color_by='z', markersize=5, tooltips=Non
         height=600,
         margin=dict(l=0, r=0, b=0, t=0),
         scene=dict(
-            xaxis=dict(title=axes_names[0]),
-            yaxis=dict(title=axes_names[1]),
-            zaxis=dict(title=axes_names[2], type='log' if z_log else None)
+            xaxis=dict(title=axes_names[0], type='log' if log_axes[0] else None),
+            yaxis=dict(title=axes_names[1], type='log' if log_axes[1] else None),
+            zaxis=dict(title=axes_names[2], type='log' if log_axes[2] else None),
         )
     )
     fig = go.Figure(data=data, layout=layout)
