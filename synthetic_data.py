@@ -22,9 +22,10 @@ def make2D(arr):
 
 def random_covariance_matrix(d, max_variation):
     '''
+        based on: https://math.stackexchange.com/a/1879937
         Generate a random covariance matrix which implies that it must be:
         - symmetric
-        - positive semi-definate, meaning that all eigenvalues must be >0
+        - positive semi-definite, meaning that all eigenvalues must be >0
             (but for practical purposes all eigenvalues must be >eps (for some small eps) instead of >0)
 
         Method: Use the eigendecomposition: A = P * D * P^T
@@ -40,7 +41,8 @@ def random_covariance_matrix(d, max_variation):
     '''
     P = np.random.uniform(0, 1, size=(d, d))
     P = sp.linalg.orth(P) # generate orthogonal basis for the given matrix
-    P /= np.linalg.norm(P, ord=2, axis=0)
+    assert P.shape == (d, d) # must be full rank (matrix spans d dimensions => needs d basis vectors)
+    P /= np.linalg.norm(P, ord=2, axis=0) # normalise to make vectors unit length
     evs = np.abs(np.random.normal(max_variation/2, max_variation/2, size=(d,)))
     D = np.diag(evs.T)
     return np.matmul(P, np.matmul(D, P.T))

@@ -1,12 +1,6 @@
-import time
-import json
-import os
-
-from collections import defaultdict
-from itertools import groupby
-# dummy => not multiprocessing but fake threading, which allows access to the
-# same memory and variables
-import multiprocessing.dummy as dummy
+# fix some of the python2 ugliness
+from __future__ import print_function
+from __future__ import division
 import sys
 if sys.version_info[0] == 3: # python 3
     from queue import Empty
@@ -18,6 +12,16 @@ elif sys.version_info[0] == 2: # python 2
         return abs(a-b) <= max(rel_tol * max(abs(a), abs(b)), abs_tol)
 else:
     print('unsupported python version')
+
+import time
+import json
+import os
+
+from collections import defaultdict
+from itertools import groupby
+# dummy => not multiprocessing but fake threading, which allows access to the
+# same memory and variables
+import multiprocessing.dummy as dummy
 
 import numpy as np
 import matplotlib.pyplot as plt

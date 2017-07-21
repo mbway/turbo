@@ -263,6 +263,10 @@ class TestOptimiser(unittest.TestCase):
         self.assertEqual(optimiser.samples, samples)
         self.assertIn(optimiser.best_known_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
 
+        #TODO: test retuning an empty list
+
+    # TODO: test multiple evaluators, maybe one slower than the other
+
 
 
 

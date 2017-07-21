@@ -33,7 +33,9 @@ I then started an optimisation framework and interactive 3D plotting tools
 - 3D-Plotting.ipynb
     - a demonstration of using plot3D.py and a comparison with a (non-interactive) matplotlib 3D plot
 - optimisation.py
-    - a self-contained optimisation framework capable of Grid search, random search and Bayesian optimisation. Other features: tested, Very general and flexible, multithreaded, built in plotting tools, good logging and error handling
+    - a self-contained optimisation framework capable of Grid search, random search and Bayesian optimisation. Other features: tested, Very general and flexible, multithreaded, built in plotting tools, good logging and error handling, can save (to json) and resume optimisation
+- optimisation_tests.py
+    - unit tests and system tests for the optimisation framework
 - Optimisation.ipynb
     - A showcase of the features of optimisation.py with some toy problems in 1D and 2D
 - MLP-Optimisation.ipynb
