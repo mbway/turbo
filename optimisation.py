@@ -106,7 +106,7 @@ def config_string(config, order=None):
     '''
         similar to the string representation of a dictionary
     '''
-    assert order is None or (set(order) == set(config.keys()))
+    assert order is None or set(order) == set(config.keys())
     string = '{'
     order = sorted(list(config.keys())) if order is None else order
     for p in order:
@@ -125,23 +125,6 @@ def exception_string():
     '''
     import traceback
     return ''.join(traceback.format_exception(*sys.exc_info()))
-
-class StoreLogger(object):
-    '''
-    A logger for Optimisers which stores the output to a string rather than printing
-    '''
-    def __init__(self):
-        self.log_record = ''
-    def log(self, string, newline=True):
-        if not isinstance(string, str):
-            string = str(string)
-        self.log_record += string
-        if newline:
-            self.log_record += '\n'
-    def __str__(self):
-        return self.log_record
-    def __repr__(self):
-        return str(self)
 
 class Sample(object):
     def __init__(self, config, cost):
@@ -289,6 +272,7 @@ class LocalEvaluator(object):
         '''
         raise NotImplemented
 
+
 class Optimiser(object):
     '''
     given a search space and a function to call in order to evaluate the cost at
@@ -296,10 +280,9 @@ class Optimiser(object):
 
     Importantly: an expression for the cost function is not required
     '''
-    def __init__(self, ranges, logger=None, queue_size=1):
+    def __init__(self, ranges, queue_size=1):
         '''
         ranges: dictionary of parameter names and their ranges (numpy arrays, can be created by np.linspace or np.logspace)
-        logger: a function which takes a string to be logged and does as it wishes with it
         queue_size: the maximum number of jobs that can be posted at once
         '''
         self.ranges = dotdict(ranges)
@@ -316,8 +299,8 @@ class Optimiser(object):
         self.num_processed_jobs = 0
         self.processed_job_ids = set() # job.n is added after it is finished
 
-        self.logger = logger if logger is not None else StoreLogger()
-        self._log = self.logger.log
+        # written to by _log()
+        self.log_record = ''
 
         self.running = False
         self.proc = None # handle for the process used for asynchronous execution
@@ -325,6 +308,13 @@ class Optimiser(object):
         self.run_start = None # the time at which the last run was started
         self.duration = 0 # total time spent (persists across runs)
 
+
+    def _log(self, string, newline=True):
+        if not isinstance(string, str):
+            string = str(string)
+        self.log_record += string
+        if newline:
+            self.log_record += '\n'
 
 # Running Interrupting and Monitoring
 
@@ -381,7 +371,7 @@ class Optimiser(object):
                     print('-'*25)
 
                     if watch_log:
-                        print(str(self.logger))
+                        print(self.log_record)
                     else:
                         print('still running' + ('.'*(ticks%3)))
                         ticks += 1
@@ -396,7 +386,7 @@ class Optimiser(object):
                 self.report()
                 if watch_log:
                     print('-'*25)
-                    print(str(self.logger))
+                    print(self.log_record)
         except KeyboardInterrupt:
             clear_output(wait=True)
             if stop_if_interrupted:
@@ -657,11 +647,15 @@ class Optimiser(object):
     def save_progress(self, filename):
         '''
         save the progress of the optimisation to a JSON string which can be
-        re-loaded and continued.
+        re-loaded and continued. The optimiser must not be running for the state
+        to be saved.
 
         Note: this does not save all the state of the optimiser, only the samples
         '''
+        # make sure the optimiser stopped is in a good state before saving
+        assert self.proc is None and not self.optimiser.running
         assert self.job_queue.empty() and self.result_queue.empty()
+
         if os.path.isfile(filename):
             raise Exception('File "{}" already exists!'.format(filename))
         else:
@@ -671,9 +665,13 @@ class Optimiser(object):
     def load_progress(self, filename):
         '''
         restore the progress of an optimisation run (note: the optimiser must be
-        initialised identically to when the samples were saved)
+        initialised identically to when the samples were saved). The optimiser
+        must not be running for the state to be loaded.
         '''
+        # make sure the optimiser stopped is in a good state before loading
+        assert self.proc is None and not self.optimiser.running
         assert self.job_queue.empty() and self.result_queue.empty()
+
         with open(filename, 'r') as f:
             self._load_dict(json.loads(f.read()))
 
@@ -692,7 +690,7 @@ class Optimiser(object):
             'num_processed_jobs' : self.num_processed_jobs,
             'processed_job_ids' : self.processed_job_ids,
             'duration' : self.duration,
-            'log' : self.logger.log_record,
+            'log' : self.log_record,
             'best_sample' : {'config' : best.config, 'cost' : best.cost}
         }
 
@@ -706,7 +704,7 @@ class Optimiser(object):
         self.num_processed_jobs = save['num_processed_jobs']
         self.processed_job_ids = save['processed_job_ids']
         self.duration = save['duration']
-        self.logger.log_record = save['log']
+        self.log_record = save['log']
 
 
 class GridSearchOptimiser(Optimiser):
@@ -714,13 +712,13 @@ class GridSearchOptimiser(Optimiser):
         Grid search optimisation strategy: search with some step size over each
         dimension to find the best configuration
     '''
-    def __init__(self, ranges, logger=None, queue_size=1, order=None):
+    def __init__(self, ranges, queue_size=1, order=None):
         '''
         order: the precedence/importance of the parameters (or None for default)
             appearing earlier => more 'primary' (changes more often)
             default could be any order
         '''
-        super(self.__class__, self).__init__(ranges, logger, queue_size)
+        super(self.__class__, self).__init__(ranges, queue_size)
         self.order = list(ranges.keys()) if order is None else order
         assert set(self.order) == set(ranges.keys())
         # start at the lower boundary for each parameter
@@ -775,7 +773,7 @@ class RandomSearchOptimiser(Optimiser):
         parameters until either a certain number of samples are taken or all
         combinations have been tested.
     '''
-    def __init__(self, ranges, logger=None, queue_size=1, allow_re_tests=False, max_jobs=inf, max_retries=10000):
+    def __init__(self, ranges, queue_size=1, allow_re_tests=False, max_jobs=inf, max_retries=10000):
         '''
         allow_re_tests: whether a configuration should be tested again if it has
             already been tested. This might be desirable if the cost for a
@@ -789,7 +787,7 @@ class RandomSearchOptimiser(Optimiser):
             before giving up (to exhaustively explore the parameter space,
             perhaps finish off with a grid search?)
         '''
-        super(self.__class__, self).__init__(ranges, logger, queue_size)
+        super(self.__class__, self).__init__(ranges, queue_size)
         self.allow_re_tests = allow_re_tests
         self.tested_configurations = set()
         self.max_jobs = max_jobs
@@ -869,7 +867,7 @@ def log_uniform(low, high):
 
 
 class BayesianOptimisationOptimiser(Optimiser):
-    def __init__(self, ranges, logger=None,
+    def __init__(self, ranges,
                  acquisition_function='EI',
                  maximising_cost=False, gp_params=None, max_steps=inf,
                  pre_samples=4, ac_num_restarts=10):
@@ -889,7 +887,7 @@ class BayesianOptimisationOptimiser(Optimiser):
             acquisition function.
         '''
         ranges = {param:np.array(range_) for param,range_ in ranges.items()} # numpy arrays are required
-        super(self.__class__, self).__init__(ranges, logger, queue_size=1)
+        super(self.__class__, self).__init__(ranges, queue_size=1)
 
         if acquisition_function == 'EI':
             self.acquisition_function_name = 'EI'
@@ -1120,7 +1118,7 @@ class BayesianOptimisationOptimiser(Optimiser):
 
         returns: numpy array with shape=(1,num_attribs)
         '''
-        assert config.keys() == self.ranges.keys()
+        assert set(config.keys()) == set(self.ranges.keys())
         # self.params is sorted
         return np.array([[config[param] for param in self.params
                 if self.range_types[param] in ['linear', 'logarithmic']]])
@@ -1267,7 +1265,7 @@ def monitor_to_file(optimiser, evaluator):
             while optimiser.running or not evaluator.done:
                 # offset=0, whence=0 => absolute from beginning
                 o.seek(0, 0)
-                o.write(str(optimiser.logger))
+                o.write(optimiser.log_record)
                 o.flush()
 
                 e.seek(0, 0)
