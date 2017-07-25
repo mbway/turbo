@@ -144,9 +144,9 @@ class Job(object):
     a job is a single configuration to be tested, it may result in one or
     multiple samples being evaluated.
     '''
-    def __init__(self, config, n):
+    def __init__(self, config, job_num):
         self.config = config
-        self.n = n # job number
+        self.num = job_num
         self.samples = None
         self.exception = None
         self.exception_string = None # traceback for the exception
@@ -235,7 +235,7 @@ class LocalEvaluator(object):
         while not self.done and self.optimiser.running:
             try:
                 job = self.optimiser.job_queue.get_nowait()
-                self.log('received job {}: {}'.format(job.n, config_string(job.config)))
+                self.log('received job {}: {}'.format(job.num, config_string(job.config)))
                 start_time = time.time()
                 try:
                     results = self.test_config(job.config)
@@ -248,7 +248,7 @@ class LocalEvaluator(object):
                 # evaluator can return either a list of samples, or just a cost
                 samples = results if isinstance(results, list) else [Sample(job.config, results)]
                 job.set_results(samples, duration=time.time()-start_time)
-                self.log('returning results of job {}: samples={}'.format(job.n, job.samples))
+                self.log('returning results of job {}: samples={}'.format(job.num, job.samples))
                 self.optimiser.result_queue.put(job)
             except Empty: # job_queue empty
                 time.sleep(0.1)
@@ -297,7 +297,7 @@ class Optimiser(object):
         self.samples = []
         self.num_posted_jobs = 0 # number of jobs added to the job queue
         self.num_processed_jobs = 0
-        self.processed_job_ids = set() # job.n is added after it is finished
+        self.processed_job_ids = set() # job.num is added after it is finished
 
         # written to by _log()
         self.log_record = ''
@@ -307,6 +307,7 @@ class Optimiser(object):
         self.done = False # flag to gracefully stop asynchronous run
         self.run_start = None # the time at which the last run was started
         self.duration = 0 # total time spent (persists across runs)
+        self.poll_interval = 0.05 # number of seconds between each check of the job/results queues during run
 
 
     def _log(self, string, newline=True):
@@ -405,11 +406,11 @@ class Optimiser(object):
         '''
         return True
 
-    def _next_configuration(self, n):
+    def _next_configuration(self, job_num):
         '''
         implemented by different optimisation methods
         return the next configuration to try, or None if finished
-        n: the ID of the job that the configuration will be assigned to
+        job_num: the ID of the job that the configuration will be assigned to
         '''
         raise NotImplemented
 
@@ -430,63 +431,68 @@ class Optimiser(object):
             self.done = True
             self.running = False
 
+    def _add_jobs(self):
+        '''
+        add as many jobs as possible (limited by the queue size and _ready_for_next_configuration)
+        return whether the optimiser is out of configurations
+        '''
+        while not self.job_queue.full() and self._ready_for_next_configuration():
+            job_num = self.num_posted_jobs+1 # job number is 1-based
+            config = self._next_configuration(job_num)
+            if config is None:
+                self._log('out of configurations')
+                return True # out of configs: finish processing the outstanding jobs
+            job = Job(dotdict(config), job_num)
+            self.job_queue.put(job)
+            self.num_posted_jobs += 1
+            self._log('job {} added to queue'.format(job.num))
+        return False # not out of configs
+
+    def _process_jobs(self):
+        ''' pop each finished job off of the results queue and store their results '''
+        while not self.result_queue.empty():
+            job = self.result_queue.get()
+
+            if job.exception is not None:
+                self._log('exception raised during evaluation: {}({})\n{}'.format(
+                    str(type(job.exception)), str(job.exception), job.exception_string))
+                # stop running
+                self.done = True
+                return
+
+            for i, s in enumerate(job.samples):
+                self._log('job={:03}, job_time={}, sample {:02}: config={}, cost={:.2g}{}'.format(
+                    job.num, time_string(job.duration), i,
+                    config_string(s.config), s.cost,
+                    (' (current best)' if self.is_best(s) else '')
+                ))
+
+            self.samples.extend(job.samples)
+            self.num_processed_jobs += 1 # regardless of how many samples
+            self.processed_job_ids.add(job.num)
+
     def _run(self):
         assert not self.running, 'already running'
         self.running = True
         self.done = False
         self.run_start = time.time()
         self._log('starting optimisation...')
-        best = self.best_known_sample()
-        current_best = best.cost if best is not None else inf # current best cost
-        n = self.num_posted_jobs+1 # job number, 1-based
-
-        outstanding_jobs = 0 # the number of jobs added to the queue that have not yet been processed
         out_of_configs = False # whether there are no more configurations available from _next_configuration()
 
         while True:
             # add new jobs
-            while not out_of_configs and not self.job_queue.full() and self._ready_for_next_configuration():
-                config = self._next_configuration(n)
-                if config is None:
-                    self._log('out of configurations')
-                    out_of_configs = True
-                    break # finish processing the outstanding jobs
-                job = Job(dotdict(config), n)
-                n += 1
-                self.job_queue.put(job)
-                outstanding_jobs += 1
-                self.num_posted_jobs += 1
-                self._log('job {} added to queue'.format(job.n))
+            if not out_of_configs:
+                out_of_configs = self._add_jobs()
+            # process results of finished jobs
+            self._process_jobs()
 
-            # process results
-            while not self.result_queue.empty():
-                job = self.result_queue.get()
-
-                if job.exception is not None:
-                    self._log('exception raised during evaluation: {}({})\n{}'.format(
-                        str(type(job.exception)), str(job.exception), job.exception_string))
-                    self.done = True
-                    break # stop running
-
-                for i, s in enumerate(job.samples):
-                    self._log('job={:03}, job_time={}, sample {:02}: config={}, cost={:.2g}{}'.format(
-                        job.n, time_string(job.duration), i,
-                        config_string(s.config), s.cost,
-                        (' (current best)' if s.cost < current_best else '')
-                    ))
-
-                    if s.cost < current_best:
-                        current_best = s.cost
-                self.samples.extend(job.samples)
-                self.num_processed_jobs += 1 # regardless of how many samples
-                self.processed_job_ids.add(job.n)
-                outstanding_jobs -= 1
-
+            outstanding_jobs = self.num_posted_jobs - self.num_processed_jobs
             if self.done or (out_of_configs and outstanding_jobs == 0):
                 break
 
-            time.sleep(0.05)
+            time.sleep(self.poll_interval)
 
+        outstanding_jobs = self.num_posted_jobs - self.num_processed_jobs
         if self.done:
             self._log('optimisation interrupted and shut down gracefully')
         elif out_of_configs and outstanding_jobs == 0:
@@ -503,12 +509,17 @@ class Optimiser(object):
 
 # Extracting Results
 
-    def best_known_sample(self):
+    def best_sample(self):
         ''' returns the best known (config, cost) or None if there is none '''
         if len(self.samples) > 0:
             return min(self.samples, key=lambda s: s.cost)
         else:
             return None
+
+    def is_best(self, sample):
+        ''' returns whether the given sample is as good as or better than those in self.samples '''
+        best = self.best_sample()
+        return best is None or sample.cost <= best.cost
 
     def report(self):
         # duration of the current run
@@ -520,7 +531,7 @@ class Optimiser(object):
         percent_progress = self.num_processed_jobs/float(samples_total)*100.0
         print('{} of {} samples ({:.1f}%) taken in {}.'.format(
             self.num_processed_jobs, samples_total, percent_progress, time_string(dur)))
-        best = self.best_known_sample()
+        best = self.best_sample()
         if best is None:
             print('no best configuration known')
         else:
@@ -681,7 +692,7 @@ class Optimiser(object):
         generate the dictionary to be JSON serialised and saved
         (designed to be overridden by derived classes in order to save specialised data)
         '''
-        best = self.best_known_sample()
+        best = self.best_sample()
         if best is None:
             best = Sample({}, inf)
         return {
@@ -748,7 +759,7 @@ class GridSearchOptimiser(Optimiser):
         # if the carry flag is true then the whole 'number' has overflowed => finished
         self.progress_overflow = carry
 
-    def _next_configuration(self, n):
+    def _next_configuration(self, job_num):
         if self.progress_overflow:
             return None # done
         else:
@@ -806,7 +817,7 @@ class RandomSearchOptimiser(Optimiser):
         # (evaluators may introduce new parameters to a configuration)
         return '|'.join([str(config[param]) for param in sorted(self.ranges.keys())])
 
-    def _next_configuration(self, n):
+    def _next_configuration(self, job_num):
         if self.num_processed_jobs >= self.max_jobs:
             return None # done
         else:
@@ -968,6 +979,11 @@ class BayesianOptimisationOptimiser(Optimiser):
         '''
         maximise the acquisition function to obtain the next configuration to test
         returns: config (as a point/numpy array), acquisition value (not negative)
+
+        Important note: This is a _local_ optimisation. This means that _any_
+        local optimum is acceptable. There may be some slight variations in the
+        function even if it looks flat when plotted, and the 'maximum' sometimes
+        rests there, and not at the obvious global maximum. This is fine.
         '''
         # scipy has no maximise function, so instead minimise the negation of the acquisition function
         # reshape(1,-1) => 1 sample (row) with N attributes (cols). Needed because x is passed as shape (N,)
@@ -990,7 +1006,7 @@ class BayesianOptimisationOptimiser(Optimiser):
                 fun=neg_acquisition_function,
                 x0=starting_point,
                 bounds=bounds,
-                method='L-BFGS-B',
+                method='L-BFGS-B', # Limited-Memory Broyden-Fletcher-Goldfarb-Shanno Bounded
                 options=dict(maxiter=15000) # maxiter=15000 is default
             )
             if not result.success:
@@ -1006,22 +1022,24 @@ class BayesianOptimisationOptimiser(Optimiser):
         # acquisition function optimisation finished:
         # best_next_x = argmax(acquisition_function)
 
+        assert best_next_x is not None, 'all the restarts of the maximisation have failed'
+
         # reshape to make shape=(1,num_attribs) and negate best_neg_ac to make
         # it the positive acquisition function value
         return best_next_x.reshape(1,-1), -best_neg_ac
 
-    def _next_configuration(self, n):
+    def _next_configuration(self, job_num):
         if self.num_posted_jobs > self.max_steps:
             return None # finished, no more jobs
         if self.num_posted_jobs < self.pre_samples:
             # still in the pre-phase where samples are chosen at random
             # self.pre_samples is the _minimum_ number of samples to take before starting
             config = self._random_config()
-            self._log('in pre-phase: choosing random configuration {}/{}'.format(n, self.pre_samples))
+            self._log('in pre-phase: choosing random configuration {}/{}'.format(job_num, self.pre_samples))
             return config
         else:
             # Bayesian optimisation
-            self.wait_for_job = n # do not add a new job until this job has been processed
+            self.wait_for_job = job_num # do not add a new job until this job has been processed
 
             # samples converted to points which can be used in calculations
             # shape=(num_samples, num_attribs)
@@ -1052,7 +1070,7 @@ class BayesianOptimisationOptimiser(Optimiser):
             else:
                 next_x = self.point_to_config(next_x)
 
-            self.step_log[n] = dict(
+            self.step_log[job_num] = dict(
                 sx=sx, sy=sy,
                 best_sample=best_sample,
                 next_x=next_x, next_ac=next_ac
@@ -1202,7 +1220,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         # plot samples projected onto the `param` axis
         # reshape needed because using x in sx reduces each row to a 1D array
         sample_xs = [self.point_to_config(x.reshape(1,-1))[param] for x in s.sx]
-        ax1.plot(sample_xs, s.sy, 'bo', label='samples')
+        ax1.plot(sample_xs, s.sy, 'bo', label='samples') #TODO: plot best specially
 
         # take the next_x configuration and perturb the parameter `param` while leaving the others intact
         # this essentially produces a line through the parameter space to predict uncertainty along

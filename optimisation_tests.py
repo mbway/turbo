@@ -74,15 +74,19 @@ class TestUtils(unittest.TestCase):
 
 class TestOptimiser(unittest.TestCase):
     def test_simple_grid(self):
+        for queue_size in [1, 100]:
+            self._simple_grid(queue_size)
+
+    def _simple_grid(self, queue_size):
         ranges = {'a':[1,2], 'b':[3,4]}
         class TestEvaluator(op.LocalEvaluator):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+        optimiser = op.GridSearchOptimiser(ranges, queue_size=queue_size, order=['a','b'])
         evaluator = TestEvaluator(optimiser)
 
-        self.assertEqual(optimiser.best_known_sample(), None)
+        self.assertEqual(optimiser.best_sample(), None)
 
         optimiser.run(run_async=True)
         evaluator.start(run_async=True)
@@ -98,7 +102,7 @@ class TestOptimiser(unittest.TestCase):
         samples = [mks(1,3,1), mks(2,3,2), mks(1,4,1), mks(2,4,2)]
 
         self.assertEqual(optimiser.samples, samples)
-        self.assertIn(optimiser.best_known_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
+        self.assertIn(optimiser.best_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
 
 
     def test_grid_specific_order(self):
@@ -107,7 +111,7 @@ class TestOptimiser(unittest.TestCase):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        optimiser = op.GridSearchOptimiser(ranges, order=['b','a'])
+        optimiser = op.GridSearchOptimiser(ranges, queue_size=100, order=['b','a'])
         evaluator = TestEvaluator(optimiser)
 
         optimiser.run(run_async=True)
@@ -124,7 +128,7 @@ class TestOptimiser(unittest.TestCase):
         samples = [mks(1,3,1), mks(1,4,1), mks(2,3,2), mks(2,4,2)]
 
         self.assertEqual(optimiser.samples, samples)
-        self.assertIn(optimiser.best_known_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
+        self.assertIn(optimiser.best_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
 
     def test_range_length_1(self):
         # ranges of length 0 are not allowed
@@ -133,7 +137,7 @@ class TestOptimiser(unittest.TestCase):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+        optimiser = op.GridSearchOptimiser(ranges, queue_size=100, order=['a','b'])
         evaluator = TestEvaluator(optimiser)
 
         optimiser.run(run_async=True)
@@ -150,7 +154,7 @@ class TestOptimiser(unittest.TestCase):
         samples = [mks(1,2,1)]
 
         self.assertEqual(optimiser.samples, samples)
-        self.assertEqual(optimiser.best_known_sample(), mks(1,2,1))
+        self.assertEqual(optimiser.best_sample(), mks(1,2,1))
 
     def test_empty_range(self):
         ranges = {}
@@ -158,7 +162,7 @@ class TestOptimiser(unittest.TestCase):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        optimiser = op.GridSearchOptimiser(ranges, order=[])
+        optimiser = op.GridSearchOptimiser(ranges, queue_size=100, order=[])
         evaluator = TestEvaluator(optimiser)
 
         optimiser.run(run_async=True)
@@ -172,15 +176,19 @@ class TestOptimiser(unittest.TestCase):
         self.assertIsNone(evaluator.proc)
 
         self.assertEqual(optimiser.samples, [])
-        self.assertEqual(optimiser.best_known_sample(), None)
+        self.assertEqual(optimiser.best_sample(), None)
 
     def test_simple_random(self):
+        for queue_size in [1, 100]:
+            self._simple_grid(queue_size)
+
+    def _simple_random(self, queue_size):
         ranges = {'a':[1,2], 'b':[3,4]}
         class TestEvaluator(op.LocalEvaluator):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        optimiser = op.RandomSearchOptimiser(ranges)
+        optimiser = op.RandomSearchOptimiser(ranges, queue_size=queue_size)
         evaluator = TestEvaluator(optimiser)
 
         optimiser.run(run_async=True)
@@ -202,7 +210,7 @@ class TestOptimiser(unittest.TestCase):
         for s in samples:
             self.assertIn(s, optimiser.samples)
 
-        self.assertIn(optimiser.best_known_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
+        self.assertIn(optimiser.best_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
 
     def test_evaluator_stop(self):
         '''
@@ -216,7 +224,7 @@ class TestOptimiser(unittest.TestCase):
                 return config.a # placeholder cost function
         mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
 
-        optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+        optimiser = op.GridSearchOptimiser(ranges, queue_size=100, order=['a','b'])
         evaluator = TestEvaluator(optimiser)
 
         optimiser.run(run_async=True)
@@ -241,7 +249,7 @@ class TestOptimiser(unittest.TestCase):
 
         samples = [mks(1,3,1), mks(2,3,2), mks(1,4,1), mks(2,4,2)]
         self.assertEqual(optimiser.samples, samples)
-        self.assertIn(optimiser.best_known_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
+        self.assertIn(optimiser.best_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
 
     def test_save_progress(self):
         pass
@@ -260,7 +268,7 @@ class TestOptimiser(unittest.TestCase):
                 new_config.abc = 123
                 return [op.Sample(config, config.a), op.Sample(new_config, 10)]
 
-        optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+        optimiser = op.GridSearchOptimiser(ranges, queue_size=100, order=['a','b'])
         evaluator = TestEvaluator(optimiser)
 
         optimiser.run(run_async=True)
@@ -281,7 +289,7 @@ class TestOptimiser(unittest.TestCase):
                    mks(2,4,2), mks_2(2,4,10)]
 
         self.assertEqual(optimiser.samples, samples)
-        self.assertIn(optimiser.best_known_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
+        self.assertIn(optimiser.best_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
 
         #TODO: test retuning an empty list
 
