@@ -88,7 +88,7 @@ class TestOptimiser(unittest.TestCase):
 
         self.assertEqual(optimiser.best_sample(), None)
 
-        optimiser.run(run_async=True)
+        optimiser.start(run_async=True)
         evaluator.start(run_async=True)
         optimiser.wait_for(quiet=True)
         evaluator.wait_for(quiet=True)
@@ -114,7 +114,7 @@ class TestOptimiser(unittest.TestCase):
         optimiser = op.GridSearchOptimiser(ranges, queue_size=100, order=['b','a'])
         evaluator = TestEvaluator(optimiser)
 
-        optimiser.run(run_async=True)
+        optimiser.start(run_async=True)
         evaluator.start(run_async=True)
         optimiser.wait_for(quiet=True)
         evaluator.wait_for(quiet=True)
@@ -140,7 +140,7 @@ class TestOptimiser(unittest.TestCase):
         optimiser = op.GridSearchOptimiser(ranges, queue_size=100, order=['a','b'])
         evaluator = TestEvaluator(optimiser)
 
-        optimiser.run(run_async=True)
+        optimiser.start(run_async=True)
         evaluator.start(run_async=True)
         optimiser.wait_for(quiet=True)
         evaluator.wait_for(quiet=True)
@@ -165,7 +165,7 @@ class TestOptimiser(unittest.TestCase):
         optimiser = op.GridSearchOptimiser(ranges, queue_size=100, order=[])
         evaluator = TestEvaluator(optimiser)
 
-        optimiser.run(run_async=True)
+        optimiser.start(run_async=True)
         evaluator.start(run_async=True)
         optimiser.wait_for(quiet=True)
         evaluator.wait_for(quiet=True)
@@ -191,7 +191,7 @@ class TestOptimiser(unittest.TestCase):
         optimiser = op.RandomSearchOptimiser(ranges, queue_size=queue_size)
         evaluator = TestEvaluator(optimiser)
 
-        optimiser.run(run_async=True)
+        optimiser.start(run_async=True)
         evaluator.start(run_async=True)
         optimiser.wait_for(quiet=True)
         evaluator.wait_for(quiet=True)
@@ -227,7 +227,7 @@ class TestOptimiser(unittest.TestCase):
         optimiser = op.GridSearchOptimiser(ranges, queue_size=100, order=['a','b'])
         evaluator = TestEvaluator(optimiser)
 
-        optimiser.run(run_async=True)
+        optimiser.start(run_async=True)
         self.assertTrue(optimiser.running)
 
         evaluator.start(run_async=True)
@@ -271,7 +271,7 @@ class TestOptimiser(unittest.TestCase):
         optimiser = op.GridSearchOptimiser(ranges, queue_size=100, order=['a','b'])
         evaluator = TestEvaluator(optimiser)
 
-        optimiser.run(run_async=True)
+        optimiser.start(run_async=True)
         evaluator.start(run_async=True)
         optimiser.wait_for(quiet=True)
         evaluator.wait_for(quiet=True)

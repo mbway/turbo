@@ -234,6 +234,7 @@ class LocalEvaluator(object):
     def _poll_jobs(self):
         while not self.done and self.optimiser.running:
             try:
+                # nowait so that the evaluator finishes faster once the optimiser is done
                 job = self.optimiser.job_queue.get_nowait()
                 self.log('received job {}: {}'.format(job.num, config_string(job.config)))
                 start_time = time.time()
@@ -319,7 +320,7 @@ class Optimiser(object):
 
 # Running Interrupting and Monitoring
 
-    def run(self, run_async=True):
+    def start(self, run_async=True):
         '''
         run the optimisation procedure, saving each sample along the way and
         keeping track of the current best
@@ -333,7 +334,7 @@ class Optimiser(object):
         else:
             self._run()
 
-    def interrupt(self):
+    def stop(self):
         '''
         gracefully stop the currently running optimisation process if there is one
         '''
@@ -392,7 +393,7 @@ class Optimiser(object):
             clear_output(wait=True)
             if stop_if_interrupted:
                 print('interrupt caught: stopping optimisation run')
-                self.interrupt()
+                self.stop()
             else:
                 print('interrupt caught, optimiser will continue in the background')
 
