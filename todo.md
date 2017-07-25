@@ -11,3 +11,13 @@
 
 
 hyperparameter cost function: just penalise bad uncertainty and hope that the model fits the dta reasonably
+
+
+### idea:
+1. introduce high variance synthetic data where there are no real data points
+2. overfit a neural network (no weight decay regularisation)
+3. remove the synthetic data and re-train with regularisation
+
+theory: the neurons that overfit to change the output where there is synthetic data will simply be ignored rather than reset to being 'flat' which might result in better uncertainty estimation?
+
+Jeremy says that this has no theoretical backing.

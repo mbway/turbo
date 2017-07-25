@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 import unittest
 
 import time
@@ -54,6 +54,24 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(op.config_string({'a':1,'x':'hi'}, order=['x','a']), '{x="hi", a=1}') # can give non-alphabetical order
         self.assertRaises(AssertionError, op.config_string, {'a':1,'b':2}, order=['a']) # if order is given, must list all keys
 
+    def test_range_type(self):
+        self.assertEqual(op.range_type(np.linspace(1, 10, num=12)), 'linear')
+        self.assertEqual(op.range_type(np.linspace(10, 1, num=12)), 'linear') # can be in descending order
+        self.assertEqual(op.range_type(np.array([1,2,3])), 'linear')
+        self.assertEqual(op.range_type(np.array([0,10])), 'linear') # can be 2 points
+        self.assertEqual(op.range_type(np.logspace(1, 10, num=2)), 'linear') # need at least 3 points to determine logarithmic
+
+        self.assertEqual(op.range_type(np.logspace(1, 10, num=12)), 'logarithmic')
+        self.assertEqual(op.range_type(np.logspace(10, 1, num=12)), 'logarithmic') # can be in descending order
+        self.assertEqual(op.range_type(np.logspace(1, 10, num=12, base=14)), 'logarithmic') # can be any base
+
+        self.assertEqual(op.range_type(np.array([12, 1, 10])), 'arbitrary')
+        self.assertEqual(op.range_type(np.array([])), 'arbitrary')
+        self.assertEqual(op.range_type(np.array(["hi", "there"])), 'arbitrary')
+
+        self.assertEqual(op.range_type(np.array(["hi"])), 'constant')
+        self.assertEqual(op.range_type(np.array([1])), 'constant')
+
 class TestOptimiser(unittest.TestCase):
     def test_simple_grid(self):
         ranges = {'a':[1,2], 'b':[3,4]}
@@ -68,8 +86,8 @@ class TestOptimiser(unittest.TestCase):
 
         optimiser.run(run_async=True)
         evaluator.start(run_async=True)
-        optimiser.wait_for()
-        evaluator.wait_for()
+        optimiser.wait_for(quiet=True)
+        evaluator.wait_for(quiet=True)
 
         # should both have been shut down
         self.assertFalse(optimiser.running)
@@ -94,8 +112,8 @@ class TestOptimiser(unittest.TestCase):
 
         optimiser.run(run_async=True)
         evaluator.start(run_async=True)
-        optimiser.wait_for()
-        evaluator.wait_for()
+        optimiser.wait_for(quiet=True)
+        evaluator.wait_for(quiet=True)
 
         # should both have been shut down
         self.assertFalse(optimiser.running)
@@ -120,8 +138,8 @@ class TestOptimiser(unittest.TestCase):
 
         optimiser.run(run_async=True)
         evaluator.start(run_async=True)
-        optimiser.wait_for()
-        evaluator.wait_for()
+        optimiser.wait_for(quiet=True)
+        evaluator.wait_for(quiet=True)
 
         # should both have been shut down
         self.assertFalse(optimiser.running)
@@ -145,8 +163,8 @@ class TestOptimiser(unittest.TestCase):
 
         optimiser.run(run_async=True)
         evaluator.start(run_async=True)
-        optimiser.wait_for()
-        evaluator.wait_for()
+        optimiser.wait_for(quiet=True)
+        evaluator.wait_for(quiet=True)
 
         # should both have been shut down
         self.assertFalse(optimiser.running)
@@ -167,8 +185,8 @@ class TestOptimiser(unittest.TestCase):
 
         optimiser.run(run_async=True)
         evaluator.start(run_async=True)
-        optimiser.wait_for()
-        evaluator.wait_for()
+        optimiser.wait_for(quiet=True)
+        evaluator.wait_for(quiet=True)
 
         # should both have been shut down
         self.assertFalse(optimiser.running)
@@ -205,16 +223,16 @@ class TestOptimiser(unittest.TestCase):
         self.assertTrue(optimiser.running)
 
         evaluator.start(run_async=True)
-        evaluator.wait_for()
+        evaluator.wait_for(quiet=True)
         while len(optimiser.samples) == 0:
             time.sleep(0.05) # wait
         self.assertEqual(optimiser.samples, [mks(1,3,1)])
 
         for i in range(3):
             evaluator.start(run_async=True)
-            evaluator.wait_for()
+            evaluator.wait_for(quiet=True)
 
-        optimiser.wait_for()
+        optimiser.wait_for(quiet=True)
 
         # should both have been shut down
         self.assertFalse(optimiser.running)
@@ -229,6 +247,8 @@ class TestOptimiser(unittest.TestCase):
         pass
         #TODO
         #TODO need to account for jobs in the queue or maybe not?
+        #TODO save and load and make sure that the state doesn't change
+        #TODO save, make a new optimiser, load, make sure they match (__dict__ equal, perhaps with some keys removed)
     def test_evaluator_modification(self):
         pass
         #TODO: have the evaluator change the config before returning
@@ -245,8 +265,8 @@ class TestOptimiser(unittest.TestCase):
 
         optimiser.run(run_async=True)
         evaluator.start(run_async=True)
-        optimiser.wait_for()
-        evaluator.wait_for()
+        optimiser.wait_for(quiet=True)
+        evaluator.wait_for(quiet=True)
 
         # should both have been shut down
         self.assertFalse(optimiser.running)
@@ -267,15 +287,44 @@ class TestOptimiser(unittest.TestCase):
 
     # TODO: test multiple evaluators, maybe one slower than the other
 
+class TestBayesianOptimisationUtils(unittest.TestCase):
+    def test_config_to_point(self):
+        ranges = {
+            'a' : [1,2,3], # linear
+            'b' : [5], # constant
+            'c' : [1,2,3] # linear
+        }
+        optimiser = op.BayesianOptimisationOptimiser(ranges)
 
+        self.assertEqual(optimiser.config_to_point({'a':2,'b':5,'c':1}).tolist(), [[2,1]]) # ignores the constant parameter
+        self.assertEqual(optimiser.config_to_point({'c':1,'b':5,'a':2}).tolist(), [[2,1]]) # alphabetical order
+        self.assertEqual(optimiser.config_to_point({'a':9,'b':6,'c':12}).tolist(), [[9,12]]) # fine with values outside 'valid range'
 
+        self.assertEqual(optimiser.config_to_point({'a':9,'b':6,'c':12}).shape, (1,2)) # must be a 2D array
+
+        self.assertRaises(AssertionError, optimiser.config_to_point, {'a':1,'b':5}) # value for 'c' not provided (which is included in the output)
+        self.assertRaises(AssertionError, optimiser.config_to_point, {'a':1,'c':2}) # value for 'c' not provided (which is not included in the output)
+        self.assertRaises(AssertionError, optimiser.config_to_point, {'a':1,'b':5,'c':3,'z':123}) # extra value
+
+    def test_point_to_config(self):
+        ranges = {
+            'a' : [1,2,3], # linear
+            'b' : [5], # constant
+            'c' : [1,2,3] # linear
+        }
+        optimiser = op.BayesianOptimisationOptimiser(ranges)
+
+        self.assertRaisesRegexp(ValueError, 'too many attributes', optimiser.point_to_config, np.array([[1,2,3,4]])) # point too long
+        self.assertRaisesRegexp(ValueError, 'too few attributes', optimiser.point_to_config, np.array([[1]])) # point too short
+        self.assertEquals(optimiser.point_to_config(np.array([[2,3]])), {'a':2,'b':5,'c':3})
 
 if __name__ == '__main__':
     #unittest.main()
 
     suite = unittest.TestSuite([
         unittest.TestLoader().loadTestsFromTestCase(TestUtils),
-        unittest.TestLoader().loadTestsFromTestCase(TestOptimiser)
+        unittest.TestLoader().loadTestsFromTestCase(TestOptimiser),
+        unittest.TestLoader().loadTestsFromTestCase(TestBayesianOptimisationUtils)
     ])
     # verbosity: 0 => quiet, 1 => default, 2 => verbose
     unittest.TextTestRunner(verbosity=2).run(suite)

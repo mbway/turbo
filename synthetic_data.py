@@ -18,7 +18,7 @@ def make2D(arr):
     ''' convert a numpy array with shape (l,) into an array with shape (l,1)
         (np.atleast_2d behaves similarly but would give shape (1,l) instead)
     '''
-    return arr.reshape(arr.shape[0], 1)
+    return arr.reshape(-1, 1)
 
 def random_covariance_matrix(d, max_variation):
     '''
@@ -38,6 +38,14 @@ def random_covariance_matrix(d, max_variation):
 
         I found that drawing the eigenvalues from a Gaussian distribution led to more correlated results (which I wanted)
         Could also draw from uniform
+
+        note: it turns out that covariance matrices can be represented as R^TR
+        where R is an upper triangular matrix and who's elements correspond to
+        the cosine and sine of the angles of the correlation (spherical
+        parameterisation)
+        (https://www.robots.ox.ac.uk/seminars/Extra/2012_30_08_MichaelOsborne.pdf)
+        This would be a better way of creating the covariance matrices with a
+        particular shape in mind
     '''
     P = np.random.uniform(0, 1, size=(d, d))
     P = sp.linalg.orth(P) # generate orthogonal basis for the given matrix

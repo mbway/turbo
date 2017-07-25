@@ -23,10 +23,16 @@ from itertools import groupby
 # same memory and variables
 import multiprocessing.dummy as dummy
 
+from IPython.display import clear_output
+
 import numpy as np
 import matplotlib.pyplot as plt
 
-from IPython.display import clear_output
+# for Bayesian Optimisation
+import sklearn.gaussian_process as gp
+import scipy.optimize
+from scipy.stats import norm # Gaussian/normal distribution
+
 
 # local modules
 import plot3D
@@ -63,6 +69,12 @@ class NumpyJSONEncoder(json.JSONEncoder):
         else:
             return super(NumpyJSONEncoder, self).default(obj)
 
+def make2D(arr):
+    ''' convert a numpy array with shape (l,) into an array with shape (l,1)
+        (np.atleast_2d behaves similarly but would give shape (1,l) instead)
+    '''
+    return arr.reshape(-1, 1)
+
 def logspace(from_, to, num_per_mag=1):
     '''
     num_per_mag: number of samples per order of magnitude
@@ -94,7 +106,7 @@ def config_string(config, order=None):
     '''
         similar to the string representation of a dictionary
     '''
-    assert order is None or (set(order) == config.keys())
+    assert order is None or (set(order) == set(config.keys()))
     string = '{'
     order = sorted(list(config.keys())) if order is None else order
     for p in order:
@@ -121,6 +133,8 @@ class StoreLogger(object):
     def __init__(self):
         self.log_record = ''
     def log(self, string, newline=True):
+        if not isinstance(string, str):
+            string = str(string)
         self.log_record += string
         if newline:
             self.log_record += '\n'
@@ -184,8 +198,8 @@ class LocalEvaluator(object):
         '''
         note: must start the optimiser before starting the evaluator
         '''
-        assert self.proc is None
-        assert self.optimiser.running # must start optimiser first
+        assert self.proc is None, 'already running'
+        assert self.optimiser.running, 'must start optimiser first'
         self.done = False
         self.log('started')
         self.start_time = time.time()
@@ -205,15 +219,19 @@ class LocalEvaluator(object):
         self.log('stopped')
         print('stopped')
 
-    def wait_for(self):
+    def wait_for(self, quiet=False):
         if self.proc is None:
-            print('evaluator already finished')
+            if not quiet:
+                print('evaluator already finished')
         else:
             self.proc.join()
             self.proc = None
-            print('evaluator finished')
+            if not quiet:
+                print('evaluator finished')
 
     def log(self, string, newline=True):
+        if not isinstance(string, str):
+            string = str(string)
         self.log_record += string
         if newline:
             self.log_record += '\n'
@@ -234,7 +252,7 @@ class LocalEvaluator(object):
         while not self.done and self.optimiser.running:
             try:
                 job = self.optimiser.job_queue.get_nowait()
-                self.log('received job {}'.format(job.n))
+                self.log('received job {}: {}'.format(job.n, config_string(job.config)))
                 start_time = time.time()
                 try:
                     results = self.test_config(job.config)
@@ -278,22 +296,25 @@ class Optimiser(object):
 
     Importantly: an expression for the cost function is not required
     '''
-    def __init__(self, ranges, logger=None):
+    def __init__(self, ranges, logger=None, queue_size=1):
         '''
         ranges: dictionary of parameter names and their ranges (numpy arrays, can be created by np.linspace or np.logspace)
         logger: a function which takes a string to be logged and does as it wishes with it
+        queue_size: the maximum number of jobs that can be posted at once
         '''
         self.ranges = dotdict(ranges)
 
         # both queues hold Job objects, with the result queue having jobs with 'cost' filled out
-        #TODO max_size as an argument
-        self.job_queue = dummy.Queue(maxsize=10)
-        self.result_queue = dummy.Queue()
+        self.job_queue = dummy.Queue(maxsize=queue_size)
+        self.result_queue = dummy.Queue() # unlimited size
 
+        # note: number of samples may diverge from the number of jobs since a
+        # job can result in any number of samples (including 0).
         # the configurations that have been tested (list of `Sample` objects)
         self.samples = []
-        # may not be equal to len(self.samples) because the evaluator can evaluate multiple configurations at once
+        self.num_posted_jobs = 0 # number of jobs added to the job queue
         self.num_processed_jobs = 0
+        self.processed_job_ids = set() # job.n is added after it is finished
 
         self.logger = logger if logger is not None else StoreLogger()
         self._log = self.logger.log
@@ -312,7 +333,7 @@ class Optimiser(object):
         run the optimisation procedure, saving each sample along the way and
         keeping track of the current best
         '''
-        assert self.proc is None
+        assert self.proc is None, 'already running'
         if run_async:
             self.proc = dummy.Process(target=self._safe_run, args=[])
             self.proc.start()
@@ -334,13 +355,15 @@ class Optimiser(object):
                 self.proc.join()
             print('stopped.')
 
-    def wait_for(self):
+    def wait_for(self, quiet=False):
         if self.proc is None:
-            print('optimiser already finished')
+            if not quiet:
+                print('optimiser already finished')
         else:
             self.proc.join()
             self.proc = None
-            print('optimiser finished')
+            if not quiet:
+                print('optimiser finished')
 
     def monitor(self, watch_log=True, stop_if_interrupted=True):
         '''
@@ -366,7 +389,6 @@ class Optimiser(object):
                     time.sleep(1)
                     clear_output(wait=True)
 
-
                 clear_output(wait=True)
                 print('optimiser finished.')
                 print('-'*25)
@@ -383,10 +405,21 @@ class Optimiser(object):
             else:
                 print('interrupt caught, optimiser will continue in the background')
 
-    def _next_configuration(self):
+    def _ready_for_next_configuration(self):
+        '''
+        query the optimiser for whether it is ready to produce another _next_configuration.
+        This is useful for when the queue is not full, however the optimiser
+        wishes to wait for some of the jobs to finish to inform future samples.
+
+        note: False => _next_configuration will not be called
+        '''
+        return True
+
+    def _next_configuration(self, n):
         '''
         implemented by different optimisation methods
         return the next configuration to try, or None if finished
+        n: the ID of the job that the configuration will be assigned to
         '''
         raise NotImplemented
 
@@ -408,22 +441,22 @@ class Optimiser(object):
             self.running = False
 
     def _run(self):
-        assert not self.running
+        assert not self.running, 'already running'
         self.running = True
         self.done = False
         self.run_start = time.time()
         self._log('starting optimisation...')
         best = self.best_known_sample()
         current_best = best.cost if best is not None else inf # current best cost
-        n = self.num_processed_jobs+1 # sample number, 1-based
+        n = self.num_posted_jobs+1 # job number, 1-based
 
         outstanding_jobs = 0 # the number of jobs added to the queue that have not yet been processed
         out_of_configs = False # whether there are no more configurations available from _next_configuration()
 
         while True:
             # add new jobs
-            while not self.job_queue.full() and not out_of_configs:
-                config = self._next_configuration()
+            while not out_of_configs and not self.job_queue.full() and self._ready_for_next_configuration():
+                config = self._next_configuration(n)
                 if config is None:
                     self._log('out of configurations')
                     out_of_configs = True
@@ -432,6 +465,7 @@ class Optimiser(object):
                 n += 1
                 self.job_queue.put(job)
                 outstanding_jobs += 1
+                self.num_posted_jobs += 1
                 self._log('job {} added to queue'.format(job.n))
 
             # process results
@@ -455,6 +489,7 @@ class Optimiser(object):
                         current_best = s.cost
                 self.samples.extend(job.samples)
                 self.num_processed_jobs += 1 # regardless of how many samples
+                self.processed_job_ids.add(job.n)
                 outstanding_jobs -= 1
 
             if self.done or (out_of_configs and outstanding_jobs == 0):
@@ -544,7 +579,7 @@ class Optimiser(object):
             means.append(np.mean(c))
         labels = ['{:.2g}'.format(v) for v in values]
 
-        plt.figure(figsize=(16,8))
+        plt.figure(figsize=(16, 8))
 
         if plot_means:
             plt.plot(values, means, 'r-', linewidth=1, alpha=0.5)
@@ -626,6 +661,7 @@ class Optimiser(object):
 
         Note: this does not save all the state of the optimiser, only the samples
         '''
+        assert self.job_queue.empty() and self.result_queue.empty()
         if os.path.isfile(filename):
             raise Exception('File "{}" already exists!'.format(filename))
         else:
@@ -637,6 +673,7 @@ class Optimiser(object):
         restore the progress of an optimisation run (note: the optimiser must be
         initialised identically to when the samples were saved)
         '''
+        assert self.job_queue.empty() and self.result_queue.empty()
         with open(filename, 'r') as f:
             self._load_dict(json.loads(f.read()))
 
@@ -651,7 +688,9 @@ class Optimiser(object):
             best = Sample({}, inf)
         return {
             'samples' : [(s.config, s.cost) for s in self.samples],
+            'num_posted_jobs' : self.num_posted_jobs,
             'num_processed_jobs' : self.num_processed_jobs,
+            'processed_job_ids' : self.processed_job_ids,
             'duration' : self.duration,
             'log' : self.logger.log_record,
             'best_sample' : {'config' : best.config, 'cost' : best.cost}
@@ -663,7 +702,9 @@ class Optimiser(object):
         (designed to be overridden by derived classes in order to load specialised data)
         '''
         self.samples = [Sample(dotdict(config), cost) for config, cost in save['samples']]
+        self.num_posted_jobs = save['num_posted_jobs']
         self.num_processed_jobs = save['num_processed_jobs']
+        self.processed_job_ids = save['processed_job_ids']
         self.duration = save['duration']
         self.logger.log_record = save['log']
 
@@ -673,13 +714,13 @@ class GridSearchOptimiser(Optimiser):
         Grid search optimisation strategy: search with some step size over each
         dimension to find the best configuration
     '''
-    def __init__(self, ranges, logger=None, order=None):
+    def __init__(self, ranges, logger=None, queue_size=1, order=None):
         '''
         order: the precedence/importance of the parameters (or None for default)
             appearing earlier => more 'primary' (changes more often)
             default could be any order
         '''
-        super(self.__class__, self).__init__(ranges, logger)
+        super(self.__class__, self).__init__(ranges, logger, queue_size)
         self.order = list(ranges.keys()) if order is None else order
         assert set(self.order) == set(ranges.keys())
         # start at the lower boundary for each parameter
@@ -709,7 +750,7 @@ class GridSearchOptimiser(Optimiser):
         # if the carry flag is true then the whole 'number' has overflowed => finished
         self.progress_overflow = carry
 
-    def _next_configuration(self):
+    def _next_configuration(self, n):
         if self.progress_overflow:
             return None # done
         else:
@@ -734,24 +775,24 @@ class RandomSearchOptimiser(Optimiser):
         parameters until either a certain number of samples are taken or all
         combinations have been tested.
     '''
-    def __init__(self, ranges, logger=None, allow_re_tests=False, max_samples=inf, max_retries=10000):
+    def __init__(self, ranges, logger=None, queue_size=1, allow_re_tests=False, max_jobs=inf, max_retries=10000):
         '''
         allow_re_tests: whether a configuration should be tested again if it has
             already been tested. This might be desirable if the cost for a
             configuration is not deterministic. However allowing retests removes
             the option of stopping the optimisation process when max_retries is
-            exceeded, another method (eg max_samples) should be used in its place.
-        max_samples: stop taking samples after this number has been reached. By
+            exceeded, another method (eg max_jobs) should be used in its place.
+        max_jobs: stop taking samples after this number has been reached. By
             default there is no cutoff (so the search will never finish)
         max_retries: (only needed if allow_re_tests=False) the number of times
             to try generating a configuration that hasn't been tested already,
             before giving up (to exhaustively explore the parameter space,
             perhaps finish off with a grid search?)
         '''
-        super(self.__class__, self).__init__(ranges, logger)
+        super(self.__class__, self).__init__(ranges, logger, queue_size)
         self.allow_re_tests = allow_re_tests
         self.tested_configurations = set()
-        self.max_samples = max_samples
+        self.max_jobs = max_jobs
         self.max_retries = max_retries
 
     def _random_config(self):
@@ -767,8 +808,8 @@ class RandomSearchOptimiser(Optimiser):
         # (evaluators may introduce new parameters to a configuration)
         return '|'.join([str(config[param]) for param in sorted(self.ranges.keys())])
 
-    def _next_configuration(self):
-        if self.num_processed_jobs >= self.max_samples:
+    def _next_configuration(self, n):
+        if self.num_processed_jobs >= self.max_jobs:
             return None # done
         else:
             c = self._random_config()
@@ -787,6 +828,427 @@ class RandomSearchOptimiser(Optimiser):
         super(self.__class__, self)._load_dict(save)
         if not self.allow_re_tests:
             self.tested_configurations = set([self._hash_config(s.config) for s in self.samples])
+
+
+
+def range_type(range_):
+    ''' determine whether the range is 'linear', 'logarithmic', 'arbitrary' or 'constant'
+    range_: must be numpy array
+
+    note: range_ must be sorted either ascending or descending to be detected as
+        linear or logarithmic
+
+    range types:
+        - linear: >2 elements, constant difference
+        - logarithmic: >2 elements, constant difference between log(elements)
+        - arbitrary: >1 element, not linear or logarithmic (perhaps not numeric)
+        - constant: 1 element (perhaps not numeric)
+    '''
+    if len(range_) == 1:
+        return 'constant'
+    # 'i' => integer, 'u' => unsigned integer, 'f' => floating point
+    elif len(range_) < 2 or range_.dtype.kind not in 'iuf':
+        return 'arbitrary'
+    else:
+        tmp = range_[1:] - range_[:-1] # differences between element i and element i+1
+        is_lin = np.all(np.isclose(tmp[0], tmp)) # same difference between each element
+        if is_lin:
+            return 'linear'
+        else:
+            tmp = np.log(range_)
+            tmp = tmp[1:] - tmp[:-1]
+            is_log = np.all(np.isclose(tmp[0], tmp))
+            if is_log:
+                return 'logarithmic'
+            else:
+                return 'arbitrary'
+
+def log_uniform(low, high):
+    ''' sample a random number in the interval [low, high] distributed logarithmically within that space '''
+    return np.exp(np.random.uniform(np.log(low), np.log(high)))
+
+
+class BayesianOptimisationOptimiser(Optimiser):
+    def __init__(self, ranges, logger=None,
+                 acquisition_function='EI',
+                 maximising_cost=False, gp_params=None, max_steps=inf,
+                 pre_samples=4, ac_num_restarts=10):
+        '''
+        acquisition_function: the function to determine where to sample next
+            either a function or a string with the name of the function (eg 'EI')
+        maximising_cost: True => higher cost better. False => lower cost better
+        gp_params: parameter dictionary for the Gaussian Process surrogate
+            function, None will choose some sensible defaults. (See "sklearn
+            gaussian process regressor")
+        max_steps: stop taking samples after this number has been reached. By
+            default there is no cutoff (so the search will never finish)
+        pre_samples: the _minimum_ number of samples to be taken randomly before
+            starting Bayesian optimisation (may be more)
+        ac_num_restarts: number of restarts during the acquisition function
+            optimisation. Higher => more likely to find the optimum of the
+            acquisition function.
+        '''
+        ranges = {param:np.array(range_) for param,range_ in ranges.items()} # numpy arrays are required
+        super(self.__class__, self).__init__(ranges, logger, queue_size=1)
+
+        if acquisition_function == 'EI':
+            self.acquisition_function_name = 'EI'
+            self.acquisition_function = self.expected_improvement
+        else:
+            self.acquisition_function_name = 'custom acquisition function'
+            self.acquisition_function = acquisition_function
+
+        self.maximising_cost = maximising_cost
+
+        if gp_params is None:
+            self.gp_params = dict(
+                alpha = 1e-5, # larger => more noise. Default = 1e-10
+                # the default kernel
+                kernel = gp.kernels.RBF(length_scale=1.0, length_scale_bounds="fixed"),
+                n_restarts_optimizer = 10,
+                # make the mean 0 (theoretically a bad thing, see docs, but can help)
+                normalize_y = True,
+                copy_X_train = True # make a copy of the training data
+            )
+        else:
+            self.gp_params = gp_params
+
+        self.max_steps = max_steps
+        self.pre_samples = pre_samples
+        self.ac_num_restarts = ac_num_restarts
+
+        self.params = sorted(self.ranges.keys())
+        self.range_types = {param : range_type(range_) for param,range_ in self.ranges.items()}
+
+        if 'arbitrary' in self.range_types.values():
+            raise ValueError('arbitrary ranges are not allowed with Bayesian optimisation'.format(param))
+
+        # record the bounds only for the linear and logarithmic ranges
+        self.range_bounds = {param: (min(self.ranges[param]), max(self.ranges[param])) for param in self.params}
+
+        for param in self.params:
+            low, high = self.range_bounds[param]
+            self._log('param "{}": detected type: {}, bounds: [{}, {}]'.format(
+                param, self.range_types[param], low, high))
+
+        # not ready for a next configuration until the job with id ==
+        # self.wait_until has been processed
+        self.wait_for_job = None
+
+        # a log of the Bayesian optimisation steps
+        # dict of job number to dict with keys: sx, sy, best_sample, next_x, next_ac
+        self.step_log = {}
+        self.step_log_keep = 10 # max number of steps to keep
+
+    def _ready_for_next_configuration(self):
+        in_pre_phase = self.num_posted_jobs < self.pre_samples
+        # all jobs from the pre-phase are finished, need the first Bayesian
+        # optimisation sample
+        pre_phase_finished = (self.wait_for_job == None and
+                              self.num_processed_jobs >= self.pre_samples)
+        # finished waiting for the last Bayesian optimisation job to finish
+        bayes_job_finished = self.wait_for_job in self.processed_job_ids
+
+        return in_pre_phase or pre_phase_finished or bayes_job_finished
+
+    def trim_step_log(self, keep=-1):
+        '''
+        remove old steps from the step_log to save space. Keep the N steps with
+        largest job numbers
+        keep: the number of steps to keep (-1 => keep = self.step_log_keep)
+        '''
+        if keep == -1:
+            keep = self.step_log_keep
+
+        steps = self.step_log.keys()
+        if len(steps) > keep:
+            removing = sorted(steps, reverse=True)[keep:]
+            for step in removing:
+                del self.step_log[step]
+
+    def _maximise_acquisition(self, gp_model, best_sample):
+        '''
+        maximise the acquisition function to obtain the next configuration to test
+        returns: config (as a point/numpy array), acquisition value (not negative)
+        '''
+        # scipy has no maximise function, so instead minimise the negation of the acquisition function
+        # reshape(1,-1) => 1 sample (row) with N attributes (cols). Needed because x is passed as shape (N,)
+        neg_acquisition_function = lambda x: -self.acquisition_function(
+            x.reshape(1,-1), gp_model, best_sample.cost, self.maximising_cost)
+
+        # self.params is ordered. Only provide bounds for the parameters that are
+        # included in self.config_to_point
+        bounds = [self.range_bounds[param] for param in self.params
+                    if self.range_types[param] in ['linear', 'logarithmic']]
+
+        # minimise the negative acquisition function
+        best_next_x = None
+        best_neg_ac = 0 # negative acquisition function value for best_next_x
+        for j in range(self.ac_num_restarts):
+            starting_point = self.config_to_point(self._random_config())
+
+            # result is an OptimizeResult object
+            result = scipy.optimize.minimize(
+                fun=neg_acquisition_function,
+                x0=starting_point,
+                bounds=bounds,
+                method='L-BFGS-B',
+                options=dict(maxiter=15000) # maxiter=15000 is default
+            )
+            if not result.success:
+                self._log('negative acquisition minimisation failed, restarting')
+                continue
+            #assert result.success, 'minimisation of negative acquisition function failed'
+
+            # result.fun == negative acquisition function evaluated at result.x
+            if result.fun < best_neg_ac:
+                best_next_x = result.x
+                best_neg_ac = result.fun
+
+        # acquisition function optimisation finished:
+        # best_next_x = argmax(acquisition_function)
+
+        # reshape to make shape=(1,num_attribs) and negate best_neg_ac to make
+        # it the positive acquisition function value
+        return best_next_x.reshape(1,-1), -best_neg_ac
+
+    def _next_configuration(self, n):
+        if self.num_posted_jobs > self.max_steps:
+            return None # finished, no more jobs
+        if self.num_posted_jobs < self.pre_samples:
+            # still in the pre-phase where samples are chosen at random
+            # self.pre_samples is the _minimum_ number of samples to take before starting
+            config = self._random_config()
+            self._log('in pre-phase: choosing random configuration {}/{}'.format(n, self.pre_samples))
+            return config
+        else:
+            # Bayesian optimisation
+            self.wait_for_job = n # do not add a new job until this job has been processed
+
+            # samples converted to points which can be used in calculations
+            # shape=(num_samples, num_attribs)
+            sx = np.vstack([self.config_to_point(s.config) for s in self.samples])
+            # shape=(num_samples, 1)
+            sy = np.array([[s.cost] for s in self.samples])
+
+            # best known configuration and the corresponding cost of that configuration
+            chooser = max if self.maximising_cost else min
+            best_sample = chooser(self.samples, key=lambda s: s.cost)
+
+
+            gp_model = gp.GaussianProcessRegressor(**self.gp_params)
+            gp_model.fit(sx, sy)
+
+            next_x, next_ac = self._maximise_acquisition(gp_model, best_sample)
+
+            if next_x is None:
+                self._log('choosing random sample because no sample was found with acquisition value >0')
+                next_x = self._random_config()
+                next_ac = -1
+            # having two samples too close together will 'break' the GP
+            # will assume that randomly chosen samples and the pre-samples are unlikely to ever be too close
+            elif np.any(np.linalg.norm(next_x - sx) <= 1e-7):
+                self._log('choosing random sample to avoid samples being too close')
+                next_x = self._random_config()
+                next_ac = -1
+            else:
+                next_x = self.point_to_config(next_x)
+
+            self.step_log[n] = dict(
+                sx=sx, sy=sy,
+                best_sample=best_sample,
+                next_x=next_x, next_ac=next_ac
+            )
+            self.trim_step_log()
+
+            return next_x
+
+
+
+    @staticmethod
+    def expected_improvement(xs, gp_model, best_cost, maximising_cost=False, xi=0.01):
+        ''' expected improvement acquisition function
+        xs: array of configurations to evaluate the GP at. shape=(num_samples,num_attribs)
+        gp_model: the GP fitted to the past configurations
+        best_cost: the (actual) cost of the best known configuration (either smallest or largest depending on maximising_cost)
+        maximising_cost: True => higher cost is better, False => lower cost is better
+        xi: a parameter >0 for exploration/exploitation trade-off. Larger => more exploration. default of 0.01 is recommended
+        '''
+        mus, sigmas = gp_model.predict(xs, return_std=True)
+        sigmas = make2D(sigmas)
+
+        sf = 1 if maximising_cost else -1   # scaling factor
+        diff = sf * (mus - best_cost - xi)  # mu(x) - f(x+) - xi
+
+        with np.errstate(divide='ignore'):
+            Zs = diff / sigmas # produces inf where sigmas[i] == 0.0
+
+        EIs = diff * norm.cdf(Zs)  +  sigmas * norm.pdf(Zs)
+        EIs[sigmas == 0.0] = 0.0 # replace the infs with 0s
+
+        return EIs
+
+
+    def _random_config(self):
+        '''
+        generate a random configuration, sampling each parameter appropriately
+        based on its type (uniformly or log-uniformly)
+        '''
+        config = {}
+        for param in self.params:
+            type_ = self.range_types[param]
+            if type_ == 'linear':
+                low, high = self.range_bounds[param]
+                config[param] = np.random.uniform(low, high)
+            elif type_ == 'logarithmic':
+                low, high = self.range_bounds[param]
+                config[param] = log_uniform(low, high)
+            elif type_ == 'constant':
+                config[param] = self.ranges[param][0] # only 1 choice
+            else:
+                raise ValueError('invalid range type: {}'.format(type_))
+        return dotdict(config)
+
+    def config_to_point(self, config):
+        '''
+        convert a configuration (dictionary of param:val) to a point (numpy
+        array) in the parameter space that the Gaussian process uses.
+
+        config: a dictionary of parameter names to values
+
+        note: as a point, constant parameters are ignored
+
+        returns: numpy array with shape=(1,num_attribs)
+        '''
+        assert config.keys() == self.ranges.keys()
+        # self.params is sorted
+        return np.array([[config[param] for param in self.params
+                if self.range_types[param] in ['linear', 'logarithmic']]])
+
+    def point_to_config(self, point):
+        '''
+        convert a point (numpy array) used by the Gaussian process into a
+        configuration (dictionary of param:val).
+
+        note: as a point, constant parameters are ignored
+
+        returns: a configuration dict with all parameters included
+        '''
+        assert len(point.shape) == 2, 'must be a 2D point'
+        assert point.shape[0] == 1, 'only 1 point can be converted at a time'
+        config = {}
+        pi = 0 # current point index
+        for param in self.params: # self.params is sorted
+            type_ = self.range_types[param]
+            if type_ == 'constant':
+                config[param] = self.ranges[param][0] # only 1 choice
+            else:
+                # type_ = linear or logarithmic
+                if pi >= point.shape[1]: raise ValueError('point has too few attributes')
+                config[param] = point[0,pi]
+                pi += 1
+
+        if pi != point.shape[1]: raise ValueError('point has too many attributes')
+
+        return dotdict(config)
+
+
+
+    def _save_dict(self):
+        raise NotImplemented # TODO
+
+    def _load_dict(self, save):
+        raise NotImplemented # TODO
+
+
+    def plot_step_slice(self, param, step, true_cost=None, log_ac=False):
+        '''
+        plot a Bayesian optimisation step, perturbed along a single parameter.
+
+        the 1D case is trivial: the plot is simply the parameter value and the
+        corresponding cost and acquisition values.
+        in 2D, imagine the surface plot of the two parameters against cost (as
+        the height). This plot takes a cross section of that surface along the
+        specified axis and passing through the point of the next configuration
+        to test to show how the acquisition function varies along that dimension.
+        The same holds for higher dimensions but is harder to visualise.
+
+        param: the name of the parameter to perturb to obtain the graph
+        bayes_step: the job ID to plot (must be in self.step_log)
+        true_cost: true cost function corresponding to self.ranges[param] (None to omit)
+        log_ac: whether to display the negative log acquisition function instead
+        '''
+        assert step in self.step_log.keys(), 'step not recorded in the log'
+
+        s = dotdict(self.step_log[step])
+        xs = self.ranges[param]
+
+
+        gp_model = gp.GaussianProcessRegressor(**self.gp_params)
+        gp_model.fit(s.sx, s.sy)
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 10))
+        fig.suptitle('Bayesian Optimisation step {}'.format(step-self.pre_samples), fontsize=14)
+        ax1.margins(0.01, 0.1)
+        ax2.margins(0.01, 0.1)
+        plt.subplots_adjust(hspace=0.3)
+
+        #plt.subplot(2, 1, 1) # nrows, ncols, plot_number
+        ax1.set_xlabel('parameter: ' + param)
+        ax1.set_ylabel('cost')
+        ax1.set_title('Surrogate objective function')
+
+        if true_cost is not None:
+            ax1.plot(xs, true_cost, 'k--', label='true cost')
+
+        # plot samples projected onto the `param` axis
+        # reshape needed because using x in sx reduces each row to a 1D array
+        sample_xs = [self.point_to_config(x.reshape(1,-1))[param] for x in s.sx]
+        ax1.plot(sample_xs, s.sy, 'bo', label='samples')
+
+        # take the next_x configuration and perturb the parameter `param` while leaving the others intact
+        # this essentially produces a line through the parameter space to predict uncertainty along
+        def perturb(x):
+            c = s.next_x.copy()
+            c[param] = x
+            return self.config_to_point(c)
+        points = np.vstack([perturb(x) for x in xs])
+
+        mu, sigma = gp_model.predict(points, return_std=True)
+        mu = mu.flatten()
+
+        ax1.plot(xs, mu, 'm-', label='surrogate cost')
+        #plt.fill_between(xs, mu - sigma, mu + sigma, alpha=0.3, color='y')
+        ax1.fill_between(xs, mu - 3*sigma, mu + 3*sigma, alpha=0.3, color='mediumpurple', label="uncertainty $3\sigma$")
+        ax1.axvline(x=s.next_x[param])
+        ax1.legend()
+
+        #plt.subplot(2, 1, 2) # nrows, ncols, plot_number
+        ax2.set_xlabel('parameter: ' + param)
+        ax2.set_ylabel(self.acquisition_function_name)
+        ax2.set_title('acquisition function')
+
+        ac = self.acquisition_function(points, gp_model, s.best_sample.cost, self.maximising_cost)
+        if log_ac:
+            ac[ac == 0.0] = 1e-10
+            ac = -np.log(ac)
+            label = '-log(acquisition function)'
+        else:
+            label = 'acquisition function'
+
+        # show close-up on the next sample
+        #ax2.set_xlim(s.next_x[param]-1, s.next_x[param]+1)
+        #ax2.set_ylim((0.0, s.next_ac))
+
+        ax2.plot(xs, ac, '-', color='g', linewidth=1.0, label=label)
+        ax2.fill_between(xs, np.zeros_like(xs), ac.flatten(), alpha=0.3, color='palegreen')
+
+        ax2.axvline(x=s.next_x[param])
+        ax2.plot(s.next_x[param], s.next_ac, 'b*', markersize=15, alpha=0.8, label='next sample')
+        ax2.legend()
+
+        plt.show()
+        return fig
 
 
 

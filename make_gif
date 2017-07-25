@@ -1,0 +1,3 @@
+#!/bin/bash
+# delay is in 10ms chunks so 100 => 1 second
+convert -delay 100 -loop 0 "frames/*.png" output.gif
