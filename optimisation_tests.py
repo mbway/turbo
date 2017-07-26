@@ -79,6 +79,16 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(op.range_type(np.array(["hi"])), 'constant')
         self.assertEqual(op.range_type(np.array([1])), 'constant')
 
+    def test_is_numeric(self):
+        self.assertTrue(op.is_numeric(1))
+        self.assertTrue(op.is_numeric(1.0))
+
+        self.assertFalse(op.is_numeric([1]))
+        self.assertFalse(op.is_numeric(np.array([1])))
+        self.assertFalse(op.is_numeric(np.array([[1]])))
+        self.assertFalse(op.is_numeric('1'))
+        self.assertFalse(op.is_numeric('1.0'))
+
 class TestOptimiser(unittest.TestCase):
     def test_simple_grid(self):
         for queue_size in [1, 100]:
@@ -410,7 +420,22 @@ class TestBayesianOptimisationUtils(unittest.TestCase):
         self.assertEquals(optimiser.point_to_config(np.array([[2,3]])), {'a':2,'b':5,'c':3})
 
     def test_close_to_any(self):
-        pass # TODO
+        sx = np.array([[1.0, 2.0], [3.0, 4.0]])
+        x = lambda a1, a2: np.array([[a1, a2]])
+
+        self.assertTrue(op.close_to_any(x(3, 4), sx)) # exact matches
+        self.assertTrue(op.close_to_any(x(1, 2), sx))
+
+        self.assertFalse(op.close_to_any(x(100, 100), sx, tol=50)) # doesn't account for if the points in xs are close to one another
+
+        self.assertFalse(op.close_to_any(x(10, 10), sx)) # far away from any point
+        self.assertFalse(op.close_to_any(x(-10, -10), sx))
+        self.assertFalse(op.close_to_any(x(-1, -2), sx))
+        self.assertFalse(op.close_to_any(x(2, 3), sx))
+
+        self.assertTrue(op.close_to_any(x(3.0, 4.1), sx, tol=0.01001)) # just inside the tolerance
+        self.assertTrue(op.close_to_any(x(3.0, 4.1), sx, tol=0.01)) # exact squared Euclidean distance
+        self.assertFalse(op.close_to_any(x(3.0, 4.1), sx, tol=0.00999)) # just further away than the tolerance
 
 class TestBayesianOptimisation(unittest.TestCase):
     def test_simple_bayes(self):

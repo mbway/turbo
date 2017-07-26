@@ -1,6 +1,21 @@
-- Maximising cost for the other methods
+
+Parallelise Bayes:
+self.ongoing_jobs = [dict(job_num, config, predicted_cost)]
+add to the list in next_configuration()
+self.get_predicted_samples()
+    '''
+    get sx,sy points for the predicted results of ongoing jobs.
+    automatically removes any jobs from ongoing_jobs that have since finished.
+    ''
+- create a new variable for the concatenation of the real and predicted samples
+and use that for the Bayesian prediction. Keep them separate
+- save sx, sy and psx, psy where p means 'predicted' in the step_log
+- plot the predicted samples with a different style
+- include a flag to enable the parallelisation
+    - if the flag is enabled: ready_for_next_configuration should always return true
+
+
 - Read original thesis for tips on tuning params
-- UCB acquisition function
 - Write a description of what the slice graph does. Eg for 2d, a horizontal or vertical line is cut through the surface passing through the chosen point
 - for parameters which are log-uniform, feed log(param) to bayesian optimisation so that it can fit the curve better. convert back once you have the results
 - switch over to the 'unique columns' methodology for not breaking the GP instead of checking that new samples won't break it (but keep that too)

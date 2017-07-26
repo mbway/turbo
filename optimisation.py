@@ -8,6 +8,7 @@ if sys.version_info[0] == 3: # python 3
 elif sys.version_info[0] == 2: # python 2
     from Queue import Empty
     inf = float('inf')
+    # implementation from the python3 documentation
     def isclose(a, b, rel_tol=1e-09, abs_tol=0.0):
         return abs(a-b) <= max(rel_tol * max(abs(a), abs(b)), abs_tol)
 else:
@@ -56,9 +57,7 @@ class dotdict(dict):
         return dotdict(dict.copy(self))
 
 class NumpyJSONEncoder(json.JSONEncoder):
-    '''
-    unfortunately numpy primitives are not JSON serialisable
-    '''
+    ''' unfortunately numpy primitives are not JSON serialisable '''
     def default(self, obj):
         if isinstance(obj, np.integer):
             return int(obj)
@@ -103,9 +102,7 @@ def time_string(seconds):
         return '{:02d}:{}'.format(mins, secs)
 
 def config_string(config, order=None):
-    '''
-        similar to the string representation of a dictionary
-    '''
+    ''' similar to the string representation of a dictionary '''
     assert order is None or set(order) == set(config.keys())
     string = '{'
     order = sorted(list(config.keys())) if order is None else order
@@ -120,11 +117,28 @@ def config_string(config, order=None):
     return string
 
 def exception_string():
-    '''
-    get a string formatted with the last exception
-    '''
+    ''' get a string formatted with the last exception '''
     import traceback
     return ''.join(traceback.format_exception(*sys.exc_info()))
+
+def is_numeric(obj):
+    '''
+    whether 'obj' is a numeric quantity, not including types which may be
+    converted to a numeric quantity such as strings. Also numpy arrays are
+    specifically excluded, however they do support +-*/ etc.
+
+    Modified from: https://stackoverflow.com/a/500908
+    '''
+    if isinstance(obj, np.ndarray):
+        return False
+
+    if sys.version_info[0] == 3: # python 3
+        attrs = ['__add__', '__sub__', '__mul__', '__truediv__', '__pow__']
+    elif sys.version_info[0] == 2: # python 2
+        attrs = ['__add__', '__sub__', '__mul__', '__div__', '__pow__']
+
+    return all(hasattr(obj, attr) for attr in attrs)
+
 
 class Sample(object):
     def __init__(self, config, cost):
@@ -240,6 +254,7 @@ class LocalEvaluator(object):
                 start_time = time.time()
                 try:
                     results = self.test_config(job.config)
+                    assert is_numeric(results) or isinstance(results, list), 'invalid results type from evaluator'
                 except Exception as e:
                     job.exception = e
                     job.exception_string = exception_string()
@@ -467,7 +482,7 @@ class Optimiser(object):
                 self._log('job={:03}, job_time={}, sample {:02}: config={}, cost={:.2g}{}'.format(
                     job.num, time_string(job.duration), i,
                     config_string(s.config), s.cost,
-                    (' (current best)' if self.is_best(s) else '')
+                    (' (current best)' if self.sample_is_best(s) else '')
                 ))
 
             self.samples.extend(job.samples)
@@ -520,7 +535,7 @@ class Optimiser(object):
         else:
             return None
 
-    def is_best(self, sample):
+    def sample_is_best(self, sample):
         ''' returns whether the given sample is as good as or better than those in self.samples '''
         best = self.best_sample()
         return (best is None or
@@ -894,39 +909,66 @@ def close_to_any(x, xs, tol=1e-5):
     ''' whether the point x is close to any of the points in xs
     x: the point to test. shape=(1, num_attribs)
     xs: the points to compare with. shape=(num_points, num_attribs)
-    tol: maximum size of the l2 norm to be considered 'close'
+    tol: maximum size of the squared Euclidean distance to be considered 'close'
     '''
     assert x.shape[1] == xs.shape[1], 'different number of attributes'
     assert x.shape[0] == 1, 'x must be a single point'
+    assert xs.shape[0] > 0, 'xs must not be empty'
+    assert len(x.shape) == len(xs.shape) == 2, 'must be 2D arrays'
 
-    return np.any(np.linalg.norm(xs - x, axis=1) <= tol)
+    #return np.any(np.linalg.norm(xs - x, axis=1) <= tol)  # l2 norm (Euclidean distance)
+    # x is subtracted from each row of xs, each element is squared, each row is
+    # summed to leave a 1D array and each sum is checked with the tolerance
+    return np.any(np.sum((xs - x)**2, axis=1) <= tol) # squared Euclidean distance
 
 
 class BayesianOptimisationOptimiser(Optimiser):
     def __init__(self, ranges, maximise_cost=False,
-                 acquisition_function='EI',
-                 gp_params=None, max_jobs=inf,
-                 pre_samples=4, ac_num_restarts=10):
+                 acquisition_function='EI', acquisition_function_params=dict(),
+                 gp_params=None, max_jobs=inf, pre_samples=4, ac_num_restarts=10,
+                 close_tolerance=1e-5):
         '''
         acquisition_function: the function to determine where to sample next
             either a function or a string with the name of the function (eg 'EI')
+        acquisition_function_params: a dictionary of parameter names and values
+            to be passed to the acquisition function. (see specific acquisition
+            function for details on what parameters it takes)
         gp_params: parameter dictionary for the Gaussian Process surrogate
             function, None will choose some sensible defaults. (See "sklearn
             gaussian process regressor")
         max_jobs: stop posing jobs after this number has been reached. By
             default there is no cutoff (so the search will never finish)
-        pre_samples: the _minimum_ number of samples to be taken randomly before
-            starting Bayesian optimisation (may be more)
+        pre_samples: the number of samples to be taken randomly before starting
+            Bayesian optimisation
         ac_num_restarts: number of restarts during the acquisition function
             optimisation. Higher => more likely to find the optimum of the
             acquisition function.
+        close_tolerance: in some situations Bayesian optimisation may get stuck
+            on local optima and will continue to sample points roughly in the
+            same location. When this happens the GP can break (as input values
+            must be unique within some tolerance). It is also a waste of
+            resources to sample lots of times in a very small neighbourhood.
+            Instead, when the next sample is to be 'close' to any of the points
+            sampled before (ie squared Euclidean distance <= close_tolerance),
+            sample a random point instead.
         '''
         ranges = {param:np.array(range_) for param,range_ in ranges.items()} # numpy arrays are required
         super(self.__class__, self).__init__(ranges, maximise_cost, queue_size=1)
 
+        self.acquisition_function_params = acquisition_function_params
+        ac_param_keys = set(self.acquisition_function_params.keys())
         if acquisition_function == 'EI':
             self.acquisition_function_name = 'EI'
             self.acquisition_function = self.expected_improvement
+            # <= is subset. Not all params must be provided, but those given must be valid
+            assert ac_param_keys <= set(['xi']), 'invalid acquisition function parameters'
+
+        elif acquisition_function == 'UCB':
+            self.acquisition_function_name = 'UCB'
+            self.acquisition_function = self.upper_confidence_bound
+            # <= is subset. Not all params must be provided, but those given must be valid
+            assert ac_param_keys <= set(['kappa']), 'invalid acquisition function parameters'
+
         else:
             self.acquisition_function_name = 'custom acquisition function'
             self.acquisition_function = acquisition_function
@@ -939,7 +981,7 @@ class BayesianOptimisationOptimiser(Optimiser):
                 n_restarts_optimizer = 10,
                 # make the mean 0 (theoretically a bad thing, see docs, but can help)
                 normalize_y = True,
-                copy_X_train = True # make a copy of the training data
+                copy_X_train = True # whether to make a copy of the training data (in-case it is modified)
             )
         else:
             self.gp_params = gp_params
@@ -947,6 +989,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         self.max_jobs = max_jobs
         self.pre_samples = pre_samples
         self.ac_num_restarts = ac_num_restarts
+        self.close_tolerance = close_tolerance
 
         self.params = sorted(self.ranges.keys())
         self.range_types = {param : range_type(range_) for param,range_ in self.ranges.items()}
@@ -967,7 +1010,18 @@ class BayesianOptimisationOptimiser(Optimiser):
         self.wait_for_job = None
 
         # a log of the Bayesian optimisation steps
-        # dict of job number to dict with keys: sx, sy, best_sample, next_x, next_ac
+        # dict of job number to dict with values:
+        #
+        # sx, sy: numpy arrays corresponding to points of samples taken thus far
+        # best_sample: best sample so far
+        # next_x: next config to test
+        # next_ac: value of acquisition function evaluated at next_x (if not
+        #    chosen_at_random)
+        # chosen_at_random: whether next_x was chosen randomly rather than by
+        #   maximising the acquisition function
+        # argmax_acquisition: the next config to test (as a point) as determined
+        #   by maximising the acquisition function (different to next_x if
+        #   chosen_at_random)
         self.step_log = {}
         self.step_log_keep = 10 # max number of steps to keep
 
@@ -1015,8 +1069,9 @@ class BayesianOptimisationOptimiser(Optimiser):
         '''
         # scipy has no maximise function, so instead minimise the negation of the acquisition function
         # reshape(1,-1) => 1 sample (row) with N attributes (cols). Needed because x is passed as shape (N,)
+        # unpacking the params dict is harmless if the dict is empty
         neg_acquisition_function = lambda x: -self.acquisition_function(
-            x.reshape(1,-1), gp_model, best_cost, self.maximise_cost)
+            x.reshape(1,-1), gp_model, self.maximise_cost, best_cost, **self.acquisition_function_params)
 
         # self.params is ordered. Only provide bounds for the parameters that are
         # included in self.config_to_point
@@ -1025,9 +1080,10 @@ class BayesianOptimisationOptimiser(Optimiser):
 
         # minimise the negative acquisition function
         best_next_x = None
-        #TODO: is this guaranteed to be the minimum/maximum for all functions including UCB
-        best_neg_ac = 0 # negative acquisition function value for best_next_x
+        best_neg_ac = inf # negative acquisition function value for best_next_x
         for j in range(self.ac_num_restarts):
+            # this random configuration can be anywhere, it doesn't matter if it
+            # is close to an existing sample.
             starting_point = self.config_to_point(self._random_config())
 
             # result is an OptimizeResult object
@@ -1041,7 +1097,6 @@ class BayesianOptimisationOptimiser(Optimiser):
             if not result.success:
                 self._log('negative acquisition minimisation failed, restarting')
                 continue
-            #assert result.success, 'minimisation of negative acquisition function failed'
 
             # result.fun == negative acquisition function evaluated at result.x
             if result.fun < best_neg_ac:
@@ -1064,15 +1119,22 @@ class BayesianOptimisationOptimiser(Optimiser):
             return None # finished, no more jobs
         if self.num_posted_jobs < self.pre_samples:
             # still in the pre-phase where samples are chosen at random
-            # self.pre_samples is the _minimum_ number of samples to take before starting
-            config = self._random_config()
-            self._log('in pre-phase: choosing random configuration {}/{}'.format(job_num, self.pre_samples))
-            return config
+            # make sure that each configuration is sufficiently different from all previous samples
+            if len(self.samples) == 0:
+                config = self._random_config()
+            else:
+                sx = np.vstack([self.config_to_point(s.config) for s in self.samples])
+                config = self._unique_random_config(different_from=sx, num_attempts=1000)
+
+            if config is None: # could not find a unique configuration
+                return None # finished
+            else:
+                self._log('in pre-phase: choosing random configuration {}/{}'.format(job_num, self.pre_samples))
+                return config
         else:
             # Bayesian optimisation
             self.wait_for_job = job_num # do not add a new job until this job has been processed
 
-            #TODO: filter out close duplicates of configuration vectors
             # samples converted to points which can be used in calculations
             # shape=(num_samples, num_attribs)
             sx = np.vstack([self.config_to_point(s.config) for s in self.samples])
@@ -1091,23 +1153,32 @@ class BayesianOptimisationOptimiser(Optimiser):
 
             next_x, next_ac = self._maximise_acquisition(gp_model, best_sample.cost)
 
+            # next_x as chosen by the acquisition function maximisation (for the step log)
+            argmax_acquisition = next_x
+
+            # maximising the acquisition function failed
             if next_x is None:
                 self._log('choosing random sample because maximising acquisition function failed')
-                next_x = self._random_config()
-                next_ac = -1
+                next_x = self._unique_random_config(different_from=sx, num_attempts=1000)
+                next_ac = 0
+                chosen_at_random = True
+            # acquisition function successfully maximised, but the resulting configuration would break the GP.
             # having two samples too close together will 'break' the GP
-            # will assume that randomly chosen samples and the pre-samples are unlikely to ever be too close
-            elif close_to_any(next_x, sx):
+            elif close_to_any(next_x, sx, self.close_tolerance):
                 self._log('choosing random sample to avoid samples being too close')
-                next_x = self._random_config()
-                next_ac = -1
+                next_x = self._unique_random_config(different_from=sx, num_attempts=1000)
+                next_ac = 0
+                chosen_at_random = True
             else:
                 next_x = self.point_to_config(next_x)
+                chosen_at_random = False
 
             self.step_log[job_num] = dict(
                 sx=sx, sy=sy,
                 best_sample=best_sample,
-                next_x=next_x, next_ac=next_ac
+                next_x=next_x, next_ac=next_ac, # chosen_at_random => next_ac=0
+                chosen_at_random=chosen_at_random,
+                argmax_acquisition=argmax_acquisition # different to next_x when chosen_at_random
             )
             self.trim_step_log()
 
@@ -1116,12 +1187,12 @@ class BayesianOptimisationOptimiser(Optimiser):
 
 
     @staticmethod
-    def expected_improvement(xs, gp_model, best_cost, maximise_cost=False, xi=0.01):
+    def expected_improvement(xs, gp_model, maximise_cost, best_cost, xi=0.01):
         r''' expected improvement acquisition function
-        xs: array of configurations to evaluate the GP at. shape=(num_samples,num_attribs)
+        xs: array of points to evaluate the GP at. shape=(num_points, num_attribs)
         gp_model: the GP fitted to the past configurations
-        best_cost: the (actual) cost of the best known configuration (either smallest or largest depending on maximise_cost)
         maximise_cost: True => higher cost is better, False => lower cost is better
+        best_cost: the (actual) cost of the best known configuration (either smallest or largest depending on maximise_cost)
         xi: a parameter >0 for exploration/exploitation trade-off. Larger => more exploration. default of 0.01 is recommended
 
         Theory:
@@ -1171,6 +1242,39 @@ class BayesianOptimisationOptimiser(Optimiser):
 
         return EIs
 
+    @staticmethod
+    def upper_confidence_bound(xs, gp_model, maximise_cost, best_cost, kappa=1.0):
+        '''
+        xs: array of points to evaluate the GP at. shape=(num_points, num_attribs)
+        gp_model: the GP fitted to the past configurations
+        maximise_cost: True => higher cost is better, False => lower cost is better
+        best_cost: not used in this acquisition function
+        kappa: parameter which controls the trade-off between exploration and
+            exploitation. Larger values favour exploration more. (geometrically,
+            the uncertainty is scaled more so is more likely to look better than
+            known good locations)
+        '''
+        mus, sigmas = gp_model.predict(xs, return_std=True)
+        sigmas = make2D(sigmas)
+        sf = 1 if maximise_cost else -1   # scaling factor
+        return sf * (mus + sf * kappa * sigmas)
+
+    def _unique_random_config(self, different_from, num_attempts=1000):
+        ''' generate a random config which is different from any configurations tested in the past
+        different_from: numpy array of points shape=(num_points, num_attribs)
+            which the resulting configuration must not be identical to (within a
+            very small tolerance). This is because identical configurations
+            would break the GP (it models a function, so each 'x' corresponds to
+            exactly one 'y')
+        num_attempts: number of re-tries before giving up
+        returns: a random configuration, or None if num_attempts is exceeded
+        '''
+        for _ in range(num_attempts):
+            config = self._random_config()
+            if not close_to_any(self.config_to_point(config), different_from, tol=self.close_tolerance):
+                return config
+        self._log('could not find a random configuration sufficiently different from previous samples, parameter space must be (almost) fully explored.')
+        return None
 
     def _random_config(self):
         '''
@@ -1190,6 +1294,7 @@ class BayesianOptimisationOptimiser(Optimiser):
                 config[param] = self.ranges[param][0] # only 1 choice
             else:
                 raise ValueError('invalid range type: {}'.format(type_))
+
         return dotdict(config)
 
     def config_to_point(self, config):
@@ -1244,7 +1349,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         raise NotImplemented # TODO
 
 
-    def plot_step_slice(self, param, step, true_cost=None, log_ac=False):
+    def plot_step_slice(self, param, step, true_cost=None, log_ac=False, n_sigma=2):
         '''
         plot a Bayesian optimisation step, perturbed along a single parameter.
 
@@ -1260,6 +1365,9 @@ class BayesianOptimisationOptimiser(Optimiser):
         bayes_step: the job ID to plot (must be in self.step_log)
         true_cost: true cost function corresponding to self.ranges[param] (None to omit)
         log_ac: whether to display the negative log acquisition function instead
+        n_sigma: the number of standard deviations from the mean to plot the
+            uncertainty confidence inerval.
+            Note 1=>68%, 2=>95%, 3=>99% (for a normal distribution, which this is)
         '''
         assert step in self.step_log.keys(), 'step not recorded in the log'
 
@@ -1271,13 +1379,15 @@ class BayesianOptimisationOptimiser(Optimiser):
         gp_model.fit(s.sx, s.sy)
 
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 10))
-        fig.suptitle('Bayesian Optimisation step {}'.format(step-self.pre_samples), fontsize=14)
+        fig.suptitle('Bayesian Optimisation step {}{}'.format(
+            step-self.pre_samples,
+            (' (chosen at random)' if s.chosen_at_random else '')), fontsize=14)
         ax1.margins(0.01, 0.1)
         ax2.margins(0.01, 0.1)
         plt.subplots_adjust(hspace=0.3)
 
         #plt.subplot(2, 1, 1) # nrows, ncols, plot_number
-        ax1.set_xlabel('parameter: ' + param)
+        #ax1.set_xlabel('parameter: ' + param) # don't need both plots to display the axis
         ax1.set_ylabel('cost')
         ax1.set_title('Surrogate objective function')
 
@@ -1300,10 +1410,15 @@ class BayesianOptimisationOptimiser(Optimiser):
         mu, sigma = gp_model.predict(points, return_std=True)
         mu = mu.flatten()
 
+        #TODO: fit the view to the cost function, don't expand to fit in the uncertainty
         ax1.plot(xs, mu, 'm-', label='surrogate cost')
-        #plt.fill_between(xs, mu - sigma, mu + sigma, alpha=0.3, color='y')
-        ax1.fill_between(xs, mu - 3*sigma, mu + 3*sigma, alpha=0.3, color='mediumpurple', label="uncertainty $3\sigma$")
+        ax1.fill_between(xs, mu - n_sigma*sigma, mu + n_sigma*sigma, alpha=0.3,
+                         color='mediumpurple', label='uncertainty ${}\\sigma$'.format(n_sigma))
         ax1.axvline(x=s.next_x[param])
+
+        if s.chosen_at_random and s.argmax_acquisition is not None:
+            ax1.axvline(x=self.point_to_config(s.argmax_acquisition)[param], color='y')
+
         ax1.legend()
 
         #plt.subplot(2, 1, 2) # nrows, ncols, plot_number
@@ -1311,8 +1426,9 @@ class BayesianOptimisationOptimiser(Optimiser):
         ax2.set_ylabel(self.acquisition_function_name)
         ax2.set_title('acquisition function')
 
-        ac = self.acquisition_function(points, gp_model, s.best_sample.cost, self.maximise_cost)
+        ac = self.acquisition_function(points, gp_model, self.maximise_cost, s.best_sample.cost, **self.acquisition_function_params)
         if log_ac:
+            # only useful for EI where ac >= 0 always
             ac[ac == 0.0] = 1e-10
             ac = -np.log(ac)
             label = '-log(acquisition function)'
@@ -1327,7 +1443,15 @@ class BayesianOptimisationOptimiser(Optimiser):
         ax2.fill_between(xs, np.zeros_like(xs), ac.flatten(), alpha=0.3, color='palegreen')
 
         ax2.axvline(x=s.next_x[param])
-        ax2.plot(s.next_x[param], s.next_ac, 'b*', markersize=15, alpha=0.8, label='next sample')
+        # may not want to plot if chosen_at_random because next_ac will be incorrect (ie 0)
+        ax2.plot(s.next_x[param], s.next_ac, 'b^', markersize=10, alpha=0.8, label='next sample')
+
+        # when chosen at random, next_x is different from what the maximisation
+        # of the acquisition function suggested as the next configuration to
+        # test. So plot both.
+        if s.chosen_at_random and s.argmax_acquisition is not None:
+            ax2.axvline(x=self.point_to_config(s.argmax_acquisition)[param], color='y', label='$\\mathrm{{argmax}}\; {}$'.format(self.acquisition_function_name))
+
         ax2.legend()
 
         plt.show()
