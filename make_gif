@@ -1,3 +1,6 @@
 #!/bin/bash
 # delay is in 10ms chunks so 100 => 1 second
-convert -delay 100 -loop 0 "frames/*.png" output.gif
+DELAY=100
+convert -delay $DELAY -layers Optimize -fuzz 15% \
+    -background white -alpha remove -loop 0 \
+    "frames/*.png" output.gif
