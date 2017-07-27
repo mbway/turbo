@@ -3,10 +3,8 @@ from __future__ import print_function
 from __future__ import division
 import sys
 if sys.version_info[0] == 3: # python 3
-    from queue import Empty
     from math import isclose, inf
 elif sys.version_info[0] == 2: # python 2
-    from Queue import Empty
     inf = float('inf')
     # implementation from the python3 documentation
     def isclose(a, b, rel_tol=1e-09, abs_tol=0.0):
@@ -37,6 +35,9 @@ from scipy.stats import norm # Gaussian/normal distribution
 
 # local modules
 import plot3D
+
+
+PORT = 9187
 
 
 class dotdict(dict):
@@ -104,17 +105,20 @@ def time_string(seconds):
 def config_string(config, order=None):
     ''' similar to the string representation of a dictionary '''
     assert order is None or set(order) == set(config.keys())
-    string = '{'
     order = sorted(list(config.keys())) if order is None else order
-    for p in order:
-        if type(config[p]) == str or type(config[p]) == np.str_:
-            string += '{}="{}", '.format(p, config[p])
-        else: # assuming numeric
-            # 2 significant figures
-            string += '{}={:.2g}, '.format(p, config[p])
-    string = string[:-2] # remove trailing comma and space
-    string += '}'
-    return string
+    if len(order) == 0:
+        return '{}'
+    else:
+        string = '{'
+        for p in order:
+            if type(config[p]) == str or type(config[p]) == np.str_:
+                string += '{}="{}", '.format(p, config[p])
+            else: # assuming numeric
+                # 2 significant figures
+                string += '{}={:.2g}, '.format(p, config[p])
+        string = string[:-2] # remove trailing comma and space
+        string += '}'
+        return string
 
 def exception_string():
     ''' get a string formatted with the last exception '''
@@ -153,78 +157,34 @@ class Sample(object):
     def __eq__(self, other):
         return self.config == other.config and self.cost == other.cost
 
-class Job(object):
-    '''
-    a job is a single configuration to be tested, it may result in one or
-    multiple samples being evaluated.
-    '''
-    def __init__(self, config, job_num):
-        self.config = config
-        self.num = job_num
-        self.samples = None
-        self.exception = None
-        self.exception_string = None # traceback for the exception
-        self.duration = None
-    def set_results(self, samples, duration=None):
-        self.samples = samples
-        self.duration = duration
+#TODO
+class JSONProtocol:
+    def __init__(self):
+        pass
+    def start_server(self):
+        pass
+    def start_client(self):
+        pass
+    def send(self, json):
+        pass
+    def receive1(self):
+        ''' return the oldest message or None if there was none '''
 
-class LocalEvaluator(object):
+class Evaluator(object):
     '''
-    an evaluator listens to the job queue of an optimiser and evaluates
-    configurations for it, responding with the cost for that configuration.
-
-    note: if an evaluator takes a job, it is obliged to process it before
-    shutting down, however if it obeys this then it may start and stop at will.
-
-    a LocalEvaluator runs in the same python process as the optimiser and
-    listens to the queue directly, either from a background thread or on the
-    thread it is called from.
     '''
-    def __init__(self, optimiser):
+    def __init__(self):
         '''
         optimiser: an Optimiser object to poll jobs from
         '''
-        self.optimiser = optimiser
-        self.proc = None
-        self.start_time = None
-        self.done = False # flag to quit
         self.log_record = ''
+        # when True, finish what its doing and gracefully stop. Allows the
+        # evaluator client to be stopped from another thread.
+        self.stop_flag = False
 
-    def start(self, run_async=True):
-        '''
-        note: must start the optimiser before starting the evaluator
-        '''
-        assert self.proc is None, 'already running'
-        assert self.optimiser.running, 'must start optimiser first'
-        self.done = False
-        self.log('started')
-        self.start_time = time.time()
-        if run_async:
-            self.proc = dummy.Process(target=self._poll_jobs, args=[])
-            self.proc.start()
-        else:
-            self._poll_jobs()
-
-    def stop(self):
-        print('stopping evaluator')
-        self.done = True
-        if self.proc is not None:
-            self.proc.join()
-            self.proc = None
-        self.start_time = None
-        self.log('stopped')
-        print('stopped')
-
-    def wait_for(self, quiet=False):
-        if self.proc is None:
-            if not quiet:
-                print('evaluator already finished')
-        else:
-            self.proc.join()
-            self.proc = None
-            if not quiet:
-                print('evaluator finished')
+    def run_client(self, host):
+        self.log('started listening at {}:{}'.format(host, PORT))
+        #TODO
 
     def log(self, string, newline=True):
         if not isinstance(string, str):
@@ -232,50 +192,6 @@ class LocalEvaluator(object):
         self.log_record += string
         if newline:
             self.log_record += '\n'
-
-    def monitor(self):
-        while not self.done:
-            print('running for {}'.format(time_string(time.time()-self.start_time)))
-            print('-'*25)
-            print(self.log_record)
-            time.sleep(1)
-            clear_output(wait=True)
-        clear_output(wait=True)
-        print('not running')
-        print('-'*25)
-        print(self.log_record)
-
-    def _poll_jobs(self):
-        while not self.done and self.optimiser.running:
-            try:
-                # nowait so that the evaluator finishes faster once the optimiser is done
-                job = self.optimiser.job_queue.get_nowait()
-                self.log('received job {}: {}'.format(job.num, config_string(job.config)))
-                start_time = time.time()
-                try:
-                    results = self.test_config(job.config)
-                    assert is_numeric(results) or isinstance(results, list), 'invalid results type from evaluator'
-                except Exception as e:
-                    job.exception = e
-                    job.exception_string = exception_string()
-                    self.log('Exception Raised: {}'.format(job.exception_string))
-                    self.optimiser.result_queue.put(job)
-                    continue
-                # evaluator can return either a list of samples, or just a cost
-                samples = results if isinstance(results, list) else [Sample(job.config, results)]
-                job.set_results(samples, duration=time.time()-start_time)
-                self.log('returning results of job {}: samples={}'.format(job.num, job.samples))
-                self.optimiser.result_queue.put(job)
-            except Empty: # job_queue empty
-                time.sleep(0.1)
-                continue
-        if self.done:
-            self.log('stopped because of an interruption')
-        elif not self.optimiser.running:
-            self.log('stopped because the optimiser is no longer running')
-        else:
-            self.log('stopped for an unknown reason')
-        self.done = True
 
     def test_config(self, config):
         '''
@@ -296,36 +212,29 @@ class Optimiser(object):
 
     Importantly: an expression for the cost function is not required
     '''
-    def __init__(self, ranges, maximise_cost=False, queue_size=1):
+    def __init__(self, ranges, maximise_cost=False):
         '''
         ranges: dictionary of parameter names and their ranges (numpy arrays, can be created by np.linspace or np.logspace)
         maximise_cost: True => higher cost is better. False => lower cost is better
-        queue_size: the maximum number of jobs that can be posted at once
         '''
         self.ranges = dotdict(ranges)
         self.maximise_cost = maximise_cost
-
-        # both queues hold Job objects, with the result queue having jobs with 'cost' filled out
-        self.job_queue = dummy.Queue(maxsize=queue_size)
-        self.result_queue = dummy.Queue() # unlimited size
 
         # note: number of samples may diverge from the number of jobs since a
         # job can result in any number of samples (including 0).
         # the configurations that have been tested (list of `Sample` objects)
         self.samples = []
-        self.num_posted_jobs = 0 # number of jobs added to the job queue
-        self.num_processed_jobs = 0
+        self.num_started_jobs = 0 # number of started jobs
+        self.num_finished_jobs = 0 # number of finished jobs
         self.processed_job_ids = set() # job.num is added after it is finished
 
         # written to by _log()
         self.log_record = ''
 
-        self.running = False
-        self.proc = None # handle for the process used for asynchronous execution
-        self.done = False # flag to gracefully stop asynchronous run
-        self.run_start = None # the time at which the last run was started
+        self.net = JSONProtocol() # for running a server
+        self.stop_flag = False # finish gracefully and stop
+        self.run_start_time = None # the time at which the last run was started
         self.duration = 0 # total time spent (persists across runs)
-        self.poll_interval = 0.05 # number of seconds between each check of the job/results queues during run
 
 
     def _log(self, string, newline=True):
@@ -337,82 +246,74 @@ class Optimiser(object):
 
 # Running Interrupting and Monitoring
 
-    def start(self, run_async=True):
-        '''
-        run the optimisation procedure, saving each sample along the way and
-        keeping track of the current best
-        '''
-        assert self.proc is None, 'already running'
-        if run_async:
-            self.proc = dummy.Process(target=self._safe_run, args=[])
-            self.proc.start()
-            while not self.running: # spin-lock waiting for start
-                time.sleep(0.001)
-        else:
-            self._run()
+    def _get_job(self):
+        self.num_started_jobs += 1
+        self._log('job {} posted'.format(job.num))
+        return False
 
-    def stop(self):
-        '''
-        gracefully stop the currently running optimisation process if there is one
-        '''
-        if not self.running:
-            print('already stopped')
-        else:
-            print('stopping optimiser...')
-            self.done = True
-            if self.proc: # running asynchronously
-                self.proc.join()
-            print('stopped.')
+    def run_server(self):
+        self.net.start_server('0.0.0.0', PORT)
 
-    def wait_for(self, quiet=False):
-        if self.proc is None:
-            if not quiet:
-                print('optimiser already finished')
-        else:
-            self.proc.join()
-            self.proc = None
-            if not quiet:
-                print('optimiser finished')
-
-    def monitor(self, watch_log=True, stop_if_interrupted=True):
-        '''
-        wait for the optimisation run to finish. (useful for monitoring an asynchronous run)
-        watch_log: whether to print the log contents while waiting
-        stop_if_interrupted: whether to interrupt the run if a KeyboardInterrupt is caught
-        '''
+    def run_sequential(self, evaluator):
         try:
-            if not self.running:
-                print('not running')
-            else:
-                ticks = 0
-                while not self.done:
-                    self.report()
-                    print('-'*25)
+            self.stop_flag = False
+            self.run_start_time = time.time()
+            self._log('starting optimisation...')
 
-                    if watch_log:
-                        print(self.log_record)
-                    else:
-                        print('still running' + ('.'*(ticks%3)))
-                        ticks += 1
+            # flags to diagnose the stopping conditions
+            out_of_configs = False
+            exception_caught = False
 
-                    time.sleep(1)
-                    clear_output(wait=True)
+            while not self.stop_flag:
+                while not self._ready_for_next_configuration():
+                    self._log('not ready for the next configuration yet')
+                    time.sleep(0.1)
 
-                clear_output(wait=True)
-                print('optimiser finished.')
-                print('-'*25)
+                job_num = self.num_started_jobs+1 # job number is 1-based
+                config = self._next_configuration(job_num)
+                if config is None:
+                    self._log('out of configurations')
+                    out_of_configs = True
+                    break
+                else:
+                    config = dotdict(config)
+                    self._log('started job {}: config={}'.format(job_num, config_string(config)))
+                    self.num_started_jobs += 1
 
-                self.report()
-                if watch_log:
-                    print('-'*25)
-                    print(self.log_record)
-        except KeyboardInterrupt:
-            clear_output(wait=True)
-            if stop_if_interrupted:
-                print('interrupt caught: stopping optimisation run')
-                self.stop()
-            else:
-                print('interrupt caught, optimiser will continue in the background')
+                start_time = time.time()
+                results = evaluator.test_config(config)
+                duration = time.time()-start_time
+
+                assert is_numeric(results) or isinstance(results, list), 'invalid results type from evaluator'
+                # evaluator can return either a list of samples, or just a cost
+                samples = results if isinstance(results, list) else [Sample(config, results)]
+                self.samples.extend(samples)
+                self.num_finished_jobs += 1
+                self.processed_job_ids.add(job_num)
+
+                self._log('finished job {} in {}:'.format(job_num, time_string(duration)))
+                for i,s in enumerate(samples):
+                    self._log('\tsample {:02}: config={}, cost={:.2g}{}'.format(
+                        i, config_string(s.config), s.cost,
+                        (' (current best)' if self.sample_is_best(s) else '')
+                    ))
+
+            run_duration = time.time()-self.run_start_time
+            self.duration += run_duration
+            self._log('total time taken: {} ({} this run)'.format(time_string(self.duration), time_string(run_duration)))
+
+        except Exception as e:
+            self._log('Exception raised during run:\n{}'.format(exception_string()))
+
+        outstanding_jobs = self.num_started_jobs - self.num_finished_jobs
+        if self.stop_flag:
+            self._log('optimisation manually shut down gracefully')
+        elif out_of_configs and outstanding_jobs == 0:
+            self._log('optimisation finished (out of configurations).')
+        else:
+            self._log('stopped for an unknown reason. (may be in an inconsistent state) (details: {} / {} / {})'.format(
+                self.stop_flag, out_of_configs, outstanding_jobs))
+
 
     def _ready_for_next_configuration(self):
         '''
@@ -432,6 +333,7 @@ class Optimiser(object):
         '''
         raise NotImplemented
 
+    #TODO: change this. maybe set grid search max_jobs and use that instead
     def total_jobs(self):
         '''
         return the total number of configurations to be tested
@@ -440,89 +342,6 @@ class Optimiser(object):
         for param_range in self.ranges.values():
             total *= len(param_range)
         return total
-
-    def _safe_run(self):
-        try:
-            self._run()
-        except Exception as e:
-            self._log('Exception raised during run: {}'.format(exception_string()))
-            self.done = True
-            self.running = False
-
-    def _add_jobs(self):
-        '''
-        add as many jobs as possible (limited by the queue size and _ready_for_next_configuration)
-        return whether the optimiser is out of configurations
-        '''
-        while not self.job_queue.full() and self._ready_for_next_configuration():
-            job_num = self.num_posted_jobs+1 # job number is 1-based
-            config = self._next_configuration(job_num)
-            if config is None:
-                self._log('out of configurations')
-                return True # out of configs: finish processing the outstanding jobs
-            job = Job(dotdict(config), job_num)
-            self.job_queue.put(job)
-            self.num_posted_jobs += 1
-            self._log('job {} added to queue'.format(job.num))
-        return False # not out of configs
-
-    def _process_jobs(self):
-        ''' pop each finished job off of the results queue and store their results '''
-        while not self.result_queue.empty():
-            job = self.result_queue.get()
-
-            if job.exception is not None:
-                self._log('exception raised during evaluation: {}({})\n{}'.format(
-                    str(type(job.exception)), str(job.exception), job.exception_string))
-                # stop running
-                self.done = True
-                return
-
-            for i, s in enumerate(job.samples):
-                self._log('job={:03}, job_time={}, sample {:02}: config={}, cost={:.2g}{}'.format(
-                    job.num, time_string(job.duration), i,
-                    config_string(s.config), s.cost,
-                    (' (current best)' if self.sample_is_best(s) else '')
-                ))
-
-            self.samples.extend(job.samples)
-            self.num_processed_jobs += 1 # regardless of how many samples
-            self.processed_job_ids.add(job.num)
-
-    def _run(self):
-        assert not self.running, 'already running'
-        self.running = True
-        self.done = False
-        self.run_start = time.time()
-        self._log('starting optimisation...')
-        out_of_configs = False # whether there are no more configurations available from _next_configuration()
-
-        while True:
-            # add new jobs
-            if not out_of_configs:
-                out_of_configs = self._add_jobs()
-            # process results of finished jobs
-            self._process_jobs()
-
-            outstanding_jobs = self.num_posted_jobs - self.num_processed_jobs
-            if self.done or (out_of_configs and outstanding_jobs == 0):
-                break
-
-            time.sleep(self.poll_interval)
-
-        outstanding_jobs = self.num_posted_jobs - self.num_processed_jobs
-        if self.done:
-            self._log('optimisation interrupted and shut down gracefully')
-        elif out_of_configs and outstanding_jobs == 0:
-            self._log('optimisation finished.')
-        else:
-            self._log('stopped for an unknown reason.')
-
-        dur = time.time()-self.run_start
-        self.duration += dur
-        self._log('total time taken: {} ({} this run)'.format(time_string(self.duration), time_string(dur)))
-        self.done = True
-        self.running = False
 
 
 # Extracting Results
@@ -544,14 +363,14 @@ class Optimiser(object):
 
     def report(self):
         # duration of the current run
-        current_dur = time.time() - self.run_start if self.running else 0
+        current_dur = time.time() - self.run_start_time if self.running else 0
         dur = self.duration + current_dur
         if self.running:
             print('currently running (has been for {}).'.format(time_string(current_dur)))
         total_jobs = self.total_jobs()
-        percent_progress = self.num_processed_jobs/float(total_jobs)*100.0
+        percent_progress = self.num_finished_jobs/float(total_jobs)*100.0
         print('{} of {} samples ({:.1f}%) taken in {}.'.format(
-            self.num_processed_jobs, total_jobs, percent_progress, time_string(dur)))
+            self.num_finished_jobs, total_jobs, percent_progress, time_string(dur)))
         best = self.best_sample()
         if best is None:
             print('no best configuration known')
@@ -684,9 +503,7 @@ class Optimiser(object):
 
         Note: this does not save all the state of the optimiser, only the samples
         '''
-        # make sure the optimiser stopped is in a good state before saving
-        assert self.proc is None and not self.optimiser.running
-        assert self.job_queue.empty() and self.result_queue.empty()
+        #TODO make sure stopped in a good state before saving
 
         if os.path.isfile(filename):
             raise Exception('File "{}" already exists!'.format(filename))
@@ -700,10 +517,7 @@ class Optimiser(object):
         initialised identically to when the samples were saved). The optimiser
         must not be running for the state to be loaded.
         '''
-        # make sure the optimiser stopped is in a good state before loading
-        assert self.proc is None and not self.optimiser.running
-        assert self.job_queue.empty() and self.result_queue.empty()
-
+        #TODO make sure stopped in a good state before saving
         with open(filename, 'r') as f:
             self._load_dict(json.loads(f.read()))
 
@@ -718,8 +532,8 @@ class Optimiser(object):
             best = Sample({}, inf)
         return {
             'samples' : [(s.config, s.cost) for s in self.samples],
-            'num_posted_jobs' : self.num_posted_jobs,
-            'num_processed_jobs' : self.num_processed_jobs,
+            'num_started_jobs' : self.num_started_jobs,
+            'num_finished_jobs' : self.num_finished_jobs,
             'processed_job_ids' : self.processed_job_ids,
             'duration' : self.duration,
             'log' : self.log_record,
@@ -732,8 +546,8 @@ class Optimiser(object):
         (designed to be overridden by derived classes in order to load specialised data)
         '''
         self.samples = [Sample(dotdict(config), cost) for config, cost in save['samples']]
-        self.num_posted_jobs = save['num_posted_jobs']
-        self.num_processed_jobs = save['num_processed_jobs']
+        self.num_started_jobs = save['num_started_jobs']
+        self.num_finished_jobs = save['num_finished_jobs']
         self.processed_job_ids = save['processed_job_ids']
         self.duration = save['duration']
         self.log_record = save['log']
@@ -744,13 +558,13 @@ class GridSearchOptimiser(Optimiser):
         Grid search optimisation strategy: search with some step size over each
         dimension to find the best configuration
     '''
-    def __init__(self, ranges, maximise_cost=False, queue_size=1, order=None):
+    def __init__(self, ranges, maximise_cost=False, order=None):
         '''
         order: the precedence/importance of the parameters (or None for default)
             appearing earlier => more 'primary' (changes more often)
             default could be any order
         '''
-        super(self.__class__, self).__init__(ranges, maximise_cost, queue_size)
+        super(self.__class__, self).__init__(ranges, maximise_cost)
         self.order = list(ranges.keys()) if order is None else order
         assert set(self.order) == set(ranges.keys())
         # start at the lower boundary for each parameter
@@ -767,7 +581,7 @@ class GridSearchOptimiser(Optimiser):
         '''
         # basically an algorithm for adding 1 to a number, but with each 'digit'
         # being of a different base. (note: 'little endian')
-        carry = False # carry flag
+        carry = True # carry flag. (Start True to account for ranges={})
         for p in self.order:
             i = self.progress[p] # current value of this 'digit'
             if i+1 >= len(self.ranges[p]): # this digit overflowed
@@ -805,7 +619,7 @@ class RandomSearchOptimiser(Optimiser):
         parameters until either a certain number of samples are taken or all
         combinations have been tested.
     '''
-    def __init__(self, ranges, maximise_cost=False, queue_size=1, allow_re_tests=False, max_jobs=inf, max_retries=10000):
+    def __init__(self, ranges, maximise_cost=False, allow_re_tests=False, max_jobs=inf, max_retries=10000):
         '''
         allow_re_tests: whether a configuration should be tested again if it has
             already been tested. This might be desirable if the cost for a
@@ -819,7 +633,7 @@ class RandomSearchOptimiser(Optimiser):
             before giving up (to exhaustively explore the parameter space,
             perhaps finish off with a grid search?)
         '''
-        super(self.__class__, self).__init__(ranges, maximise_cost, queue_size)
+        super(self.__class__, self).__init__(ranges, maximise_cost)
         self.allow_re_tests = allow_re_tests
         self.tested_configurations = set()
         self.max_jobs = max_jobs
@@ -847,7 +661,7 @@ class RandomSearchOptimiser(Optimiser):
         return '|'.join([str(config[param]) for param in self.params]) # self.params is sorted
 
     def _next_configuration(self, job_num):
-        if self.num_processed_jobs >= self.max_jobs:
+        if self.num_finished_jobs >= self.max_jobs:
             return None # done
         else:
             c = self._random_config()
@@ -954,7 +768,7 @@ class BayesianOptimisationOptimiser(Optimiser):
             sample a random point instead.
         '''
         ranges = {param:np.array(range_) for param,range_ in ranges.items()} # numpy arrays are required
-        super(self.__class__, self).__init__(ranges, maximise_cost, queue_size=1)
+        super(self.__class__, self).__init__(ranges, maximise_cost)
 
         self.acquisition_function_params = acquisition_function_params
         ac_param_keys = set(self.acquisition_function_params.keys())
@@ -1030,11 +844,11 @@ class BayesianOptimisationOptimiser(Optimiser):
         return self.max_jobs
 
     def _ready_for_next_configuration(self):
-        in_pre_phase = self.num_posted_jobs < self.pre_samples
+        in_pre_phase = self.num_started_jobs < self.pre_samples
         # all jobs from the pre-phase are finished, need the first Bayesian
         # optimisation sample
         pre_phase_finished = (self.wait_for_job == None and
-                              self.num_processed_jobs >= self.pre_samples)
+                              self.num_finished_jobs >= self.pre_samples)
         # finished waiting for the last Bayesian optimisation job to finish
         bayes_job_finished = self.wait_for_job in self.processed_job_ids
 
@@ -1123,9 +937,9 @@ class BayesianOptimisationOptimiser(Optimiser):
             return best_next_x.reshape(1,-1), -best_neg_ac
 
     def _next_configuration(self, job_num):
-        if self.num_posted_jobs > self.max_jobs:
+        if self.num_started_jobs >= self.max_jobs:
             return None # finished, no more jobs
-        if self.num_posted_jobs < self.pre_samples:
+        if self.num_started_jobs < self.pre_samples:
             # still in the pre-phase where samples are chosen at random
             # make sure that each configuration is sufficiently different from all previous samples
             if len(self.samples) == 0:

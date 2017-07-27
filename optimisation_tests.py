@@ -7,13 +7,6 @@ import numpy as np
 # local modules
 import optimisation as op
 
-def speed_up_optimiser(optimiser):
-    # speed up for testing, not recommended for real-world use where the
-    # evaluator isn't instant. Makes the optimiser post jobs as quickly as
-    # possible, for real workloads this would slow the system down.
-    # saves about 2s for all the unit tests as of time of writing.
-    optimiser.poll_interval = 0
-
 class TestUtils(unittest.TestCase):
     def test_dotdict(self):
         d = {'a' : 1}
@@ -56,6 +49,7 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(op.time_string(123*60*60 + 61), '123:01:01')
 
     def test_config_string(self):
+        self.assertEqual(op.config_string({}), '{}')
         self.assertIn(op.config_string({'a':1,'b':3.456}), ['{a=1, b=3.5}', '{b=3.5, a=1}']) # don't have to specify order
         self.assertEqual(op.config_string({'a':1,'b':3.456,'x':'hi'}, order=['a','b','x']), '{a=1, b=3.5, x="hi"}') # can have several data types
         self.assertEqual(op.config_string({'a':1,'x':'hi'}, order=['x','a']), '{x="hi", a=1}') # can give non-alphabetical order
@@ -91,30 +85,20 @@ class TestUtils(unittest.TestCase):
 
 class TestOptimiser(unittest.TestCase):
     def test_simple_grid(self):
-        for queue_size in [1, 100]:
-            self._simple_grid(queue_size)
-
-    def _simple_grid(self, queue_size):
         ranges = {'a':[1,2], 'b':[3,4]}
-        class TestEvaluator(op.LocalEvaluator):
+        class TestEvaluator(op.Evaluator):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        optimiser = op.GridSearchOptimiser(ranges, queue_size=queue_size, order=['a','b'])
-        speed_up_optimiser(optimiser)
-        evaluator = TestEvaluator(optimiser)
+        optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+        evaluator = TestEvaluator()
 
         self.assertEqual(optimiser.best_sample(), None)
 
-        optimiser.start(run_async=True)
-        evaluator.start(run_async=True)
-        optimiser.wait_for(quiet=True)
-        evaluator.wait_for(quiet=True)
+        optimiser.run_sequential(evaluator)
 
-        # should both have been shut down
-        self.assertFalse(optimiser.running)
-        self.assertIsNone(optimiser.proc)
-        self.assertIsNone(evaluator.proc)
+        self.assertTrue('Traceback' not in optimiser.log_record)
+        self.assertTrue('Exception' not in optimiser.log_record)
 
         mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
         samples = [mks(1,3,1), mks(2,3,2), mks(1,4,1), mks(2,4,2)]
@@ -125,25 +109,22 @@ class TestOptimiser(unittest.TestCase):
     def test_grid_maximise(self):
         # same as _simple_grid but maximising instead
         ranges = {'a':[1,2], 'b':[3,4]}
-        class TestEvaluator(op.LocalEvaluator):
+        class TestEvaluator(op.Evaluator):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        optimiser = op.GridSearchOptimiser(ranges, maximise_cost=True, queue_size=100, order=['a','b'])
-        speed_up_optimiser(optimiser)
-        evaluator = TestEvaluator(optimiser)
+        optimiser = op.GridSearchOptimiser(ranges, maximise_cost=True, order=['a','b'])
+        evaluator = TestEvaluator()
 
         self.assertEqual(optimiser.best_sample(), None)
 
-        optimiser.start(run_async=True)
-        evaluator.start(run_async=True)
-        optimiser.wait_for(quiet=True)
-        evaluator.wait_for(quiet=True)
+        optimiser.run_sequential(evaluator)
 
-        # should both have been shut down
-        self.assertFalse(optimiser.running)
-        self.assertIsNone(optimiser.proc)
-        self.assertIsNone(evaluator.proc)
+        self.assertTrue('Traceback' not in optimiser.log_record)
+        self.assertTrue('Exception' not in optimiser.log_record)
+
+        self.assertTrue('Traceback' not in optimiser.log_record)
+        self.assertTrue('Exception' not in optimiser.log_record)
 
         mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
         samples = [mks(1,3,1), mks(2,3,2), mks(1,4,1), mks(2,4,2)]
@@ -154,23 +135,17 @@ class TestOptimiser(unittest.TestCase):
 
     def test_grid_specific_order(self):
         ranges = {'a':[1,2], 'b':[3,4]}
-        class TestEvaluator(op.LocalEvaluator):
+        class TestEvaluator(op.Evaluator):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        optimiser = op.GridSearchOptimiser(ranges, queue_size=100, order=['b','a'])
-        speed_up_optimiser(optimiser)
-        evaluator = TestEvaluator(optimiser)
+        optimiser = op.GridSearchOptimiser(ranges, order=['b','a'])
+        evaluator = TestEvaluator()
 
-        optimiser.start(run_async=True)
-        evaluator.start(run_async=True)
-        optimiser.wait_for(quiet=True)
-        evaluator.wait_for(quiet=True)
+        optimiser.run_sequential(evaluator)
 
-        # should both have been shut down
-        self.assertFalse(optimiser.running)
-        self.assertIsNone(optimiser.proc)
-        self.assertIsNone(evaluator.proc)
+        self.assertTrue('Traceback' not in optimiser.log_record)
+        self.assertTrue('Exception' not in optimiser.log_record)
 
         mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
         samples = [mks(1,3,1), mks(1,4,1), mks(2,3,2), mks(2,4,2)]
@@ -181,23 +156,17 @@ class TestOptimiser(unittest.TestCase):
     def test_range_length_1(self):
         # ranges of length 0 are not allowed
         ranges = {'a':[1], 'b':[2]}
-        class TestEvaluator(op.LocalEvaluator):
+        class TestEvaluator(op.Evaluator):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        optimiser = op.GridSearchOptimiser(ranges, queue_size=100, order=['a','b'])
-        speed_up_optimiser(optimiser)
-        evaluator = TestEvaluator(optimiser)
+        optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+        evaluator = TestEvaluator()
 
-        optimiser.start(run_async=True)
-        evaluator.start(run_async=True)
-        optimiser.wait_for(quiet=True)
-        evaluator.wait_for(quiet=True)
+        optimiser.run_sequential(evaluator)
 
-        # should both have been shut down
-        self.assertFalse(optimiser.running)
-        self.assertIsNone(optimiser.proc)
-        self.assertIsNone(evaluator.proc)
+        self.assertTrue('Traceback' not in optimiser.log_record)
+        self.assertTrue('Exception' not in optimiser.log_record)
 
         mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
         samples = [mks(1,2,1)]
@@ -206,57 +175,45 @@ class TestOptimiser(unittest.TestCase):
         self.assertEqual(optimiser.best_sample(), mks(1,2,1))
 
     def test_empty_range(self):
+        #TODO: also test with Bayes
         ranges = {}
-        class TestEvaluator(op.LocalEvaluator):
+        class TestEvaluator(op.Evaluator):
             def test_config(self, config):
-                return config.a # placeholder cost function
+                return 123 # placeholder cost function
 
-        optimiser = op.GridSearchOptimiser(ranges, queue_size=100, order=[])
-        speed_up_optimiser(optimiser)
-        evaluator = TestEvaluator(optimiser)
+        optimiser = op.GridSearchOptimiser(ranges, order=[])
+        evaluator = TestEvaluator()
 
-        optimiser.start(run_async=True)
-        evaluator.start(run_async=True)
-        optimiser.wait_for(quiet=True)
-        evaluator.wait_for(quiet=True)
+        optimiser.run_sequential(evaluator)
 
-        # should both have been shut down
-        self.assertFalse(optimiser.running)
-        self.assertIsNone(optimiser.proc)
-        self.assertIsNone(evaluator.proc)
+        #print(optimiser.log_record)
+        self.assertTrue('Traceback' not in optimiser.log_record)
+        self.assertTrue('Exception' not in optimiser.log_record)
 
-        self.assertEqual(optimiser.samples, [])
-        self.assertEqual(optimiser.best_sample(), None)
+        s = op.Sample(config={}, cost=123)
+        self.assertEqual(optimiser.samples, [s])
+        self.assertEqual(optimiser.best_sample(), s)
 
     def test_simple_random(self):
-        for queue_size in [1, 100]:
-            self._simple_random(queue_size, False)
-
         # there is a very small chance that this will fail because after 100
         # samples, not all the configurations are tested
         for allow_re_tests in [True, False]:
-            self._simple_random(100, allow_re_tests)
+            self._simple_random(allow_re_tests)
 
 
-    def _simple_random(self, queue_size, allow_re_tests):
+    def _simple_random(self, allow_re_tests):
         ranges = {'a':[1,2], 'b':[3,4]}
-        class TestEvaluator(op.LocalEvaluator):
+        class TestEvaluator(op.Evaluator):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        optimiser = op.RandomSearchOptimiser(ranges, queue_size=queue_size, allow_re_tests=allow_re_tests, max_jobs=100)
-        speed_up_optimiser(optimiser)
-        evaluator = TestEvaluator(optimiser)
+        optimiser = op.RandomSearchOptimiser(ranges, allow_re_tests=allow_re_tests, max_jobs=100)
+        evaluator = TestEvaluator()
 
-        optimiser.start(run_async=True)
-        evaluator.start(run_async=True)
-        optimiser.wait_for(quiet=True)
-        evaluator.wait_for(quiet=True)
+        optimiser.run_sequential(evaluator)
 
-        # should both have been shut down
-        self.assertFalse(optimiser.running)
-        self.assertIsNone(optimiser.proc)
-        self.assertIsNone(evaluator.proc)
+        self.assertTrue('Traceback' not in optimiser.log_record)
+        self.assertTrue('Exception' not in optimiser.log_record)
 
         mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
         samples = [mks(1,3,1), mks(2,3,2), mks(1,4,1), mks(2,4,2)]
@@ -271,23 +228,17 @@ class TestOptimiser(unittest.TestCase):
 
     def test_random_maximise(self):
         ranges = {'a':[1,2], 'b':[3,4]}
-        class TestEvaluator(op.LocalEvaluator):
+        class TestEvaluator(op.Evaluator):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        optimiser = op.RandomSearchOptimiser(ranges, maximise_cost=True, queue_size=100, allow_re_tests=False)
-        speed_up_optimiser(optimiser)
-        evaluator = TestEvaluator(optimiser)
+        optimiser = op.RandomSearchOptimiser(ranges, maximise_cost=True, allow_re_tests=False)
+        evaluator = TestEvaluator()
 
-        optimiser.start(run_async=True)
-        evaluator.start(run_async=True)
-        optimiser.wait_for(quiet=True)
-        evaluator.wait_for(quiet=True)
+        optimiser.run_sequential(evaluator)
 
-        # should both have been shut down
-        self.assertFalse(optimiser.running)
-        self.assertIsNone(optimiser.proc)
-        self.assertIsNone(evaluator.proc)
+        self.assertTrue('Traceback' not in optimiser.log_record)
+        self.assertTrue('Exception' not in optimiser.log_record)
 
         mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
         samples = [mks(1,3,1), mks(2,3,2), mks(1,4,1), mks(2,4,2)]
@@ -306,16 +257,18 @@ class TestOptimiser(unittest.TestCase):
         have the evaluator take a single job, process it and then shutdown,
         requiring it to be started multiple times.
         '''
+        return #TODO remake with server
+
+
         ranges = {'a':[1,2], 'b':[3,4]}
-        class TestEvaluator(op.LocalEvaluator):
+        class TestEvaluator(op.Evaluator):
             def test_config(self, config):
                 self.done = True # stop processing jobs
                 return config.a # placeholder cost function
         mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
 
-        optimiser = op.GridSearchOptimiser(ranges, queue_size=100, order=['a','b'])
-        speed_up_optimiser(optimiser)
-        evaluator = TestEvaluator(optimiser)
+        optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+        evaluator = TestEvaluator()
 
         optimiser.start(run_async=True)
         self.assertTrue(optimiser.running)
@@ -350,27 +303,22 @@ class TestOptimiser(unittest.TestCase):
     def test_evaluator_modification(self):
         pass
         #TODO: have the evaluator change the config before returning
+    #TODO: ensure that exceptions raised by the evaluator appear in the output log
     def test_evaluator_list(self):
         ranges = {'a':[1,2], 'b':[3,4]}
-        class TestEvaluator(op.LocalEvaluator):
+        class TestEvaluator(op.Evaluator):
             def test_config(self, config):
                 new_config = config.copy()
                 new_config.abc = 123
                 return [op.Sample(config, config.a), op.Sample(new_config, 10)]
 
-        optimiser = op.GridSearchOptimiser(ranges, queue_size=100, order=['a','b'])
-        speed_up_optimiser(optimiser)
-        evaluator = TestEvaluator(optimiser)
+        optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+        evaluator = TestEvaluator()
 
-        optimiser.start(run_async=True)
-        evaluator.start(run_async=True)
-        optimiser.wait_for(quiet=True)
-        evaluator.wait_for(quiet=True)
+        optimiser.run_sequential(evaluator)
 
-        # should both have been shut down
-        self.assertFalse(optimiser.running)
-        self.assertIsNone(optimiser.proc)
-        self.assertIsNone(evaluator.proc)
+        self.assertTrue('Traceback' not in optimiser.log_record)
+        self.assertTrue('Exception' not in optimiser.log_record)
 
         mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
         mks_2 = lambda a,b,cost: op.Sample({'a':a, 'b':b, 'abc':123}, cost) # make sample
@@ -481,26 +429,21 @@ class TestBayesianOptimisationUtils(unittest.TestCase):
 
 class TestBayesianOptimisation(unittest.TestCase):
     def test_simple_bayes(self):
+        for a in ['EI', 'UCB']:
+            self._simple_bayes(a)
+
+    def _simple_bayes(self, acquisition_function):
         ranges = {'a':[5,10,15], 'b':[0,2,4]}
-        class TestEvaluator(op.LocalEvaluator):
+        class TestEvaluator(op.Evaluator):
             def test_config(self, config):
                 return config.a + config.b # placeholder cost function
 
-        optimiser = op.BayesianOptimisationOptimiser(ranges, acquisition_function='EI', max_jobs=30)
-        speed_up_optimiser(optimiser)
-        evaluator = TestEvaluator(optimiser)
+        optimiser = op.BayesianOptimisationOptimiser(ranges, acquisition_function=acquisition_function, max_jobs=30)
+        evaluator = TestEvaluator()
 
         self.assertEqual(optimiser.best_sample(), None)
 
-        optimiser.start(run_async=True)
-        evaluator.start(run_async=True)
-        optimiser.wait_for(quiet=True)
-        evaluator.wait_for(quiet=True)
-
-        # should both have been shut down
-        self.assertFalse(optimiser.running)
-        self.assertIsNone(optimiser.proc)
-        self.assertIsNone(evaluator.proc)
+        optimiser.run_sequential(evaluator)
 
         #print(optimiser.log_record)
         self.assertTrue('Traceback' not in optimiser.log_record)
@@ -511,25 +454,16 @@ class TestBayesianOptimisation(unittest.TestCase):
 
     def test_maximise_bayes(self):
         ranges = {'a':[5,10,15], 'b':[0,2,4]}
-        class TestEvaluator(op.LocalEvaluator):
+        class TestEvaluator(op.Evaluator):
             def test_config(self, config):
                 return config.a + config.b # placeholder cost function
 
-        optimiser = op.BayesianOptimisationOptimiser(ranges, maximise_cost=True, acquisition_function='EI', max_jobs=30)
-        speed_up_optimiser(optimiser)
-        evaluator = TestEvaluator(optimiser)
+        optimiser = op.BayesianOptimisationOptimiser(ranges, maximise_cost=True, acquisition_function='UCB', max_jobs=30)
+        evaluator = TestEvaluator()
 
         self.assertEqual(optimiser.best_sample(), None)
 
-        optimiser.start(run_async=True)
-        evaluator.start(run_async=True)
-        optimiser.wait_for(quiet=True)
-        evaluator.wait_for(quiet=True)
-
-        # should both have been shut down
-        self.assertFalse(optimiser.running)
-        self.assertIsNone(optimiser.proc)
-        self.assertIsNone(evaluator.proc)
+        optimiser.run_sequential(evaluator)
 
         #print(optimiser.log_record)
         self.assertTrue('Traceback' not in optimiser.log_record)
@@ -540,7 +474,7 @@ class TestBayesianOptimisation(unittest.TestCase):
 
 if __name__ == '__main__':
     #unittest.main()
-    np.random.seed(100) # make deterministic
+    np.random.seed(42) # make deterministic
 
     suite = unittest.TestSuite([
         unittest.TestLoader().loadTestsFromTestCase(TestUtils),
