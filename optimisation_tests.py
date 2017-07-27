@@ -394,7 +394,6 @@ class TestBayesianOptimisationUtils(unittest.TestCase):
             'c' : [1,2,3] # linear
         }
         optimiser = op.BayesianOptimisationOptimiser(ranges)
-        speed_up_optimiser(optimiser)
 
         self.assertEqual(optimiser.config_to_point({'a':2,'b':5,'c':1}).tolist(), [[2,1]]) # ignores the constant parameter
         self.assertEqual(optimiser.config_to_point({'c':1,'b':5,'a':2}).tolist(), [[2,1]]) # alphabetical order
@@ -406,6 +405,24 @@ class TestBayesianOptimisationUtils(unittest.TestCase):
         self.assertRaises(AssertionError, optimiser.config_to_point, {'a':1,'c':2}) # value for 'c' not provided (which is not included in the output)
         self.assertRaises(AssertionError, optimiser.config_to_point, {'a':1,'b':5,'c':3,'z':123}) # extra value
 
+        ranges = {
+            'a' : [1,2,3] # linear
+        }
+        optimiser = op.BayesianOptimisationOptimiser(ranges)
+        self.assertEquals(optimiser.config_to_point({'a':2}).tolist(), [[2]])
+        ranges = {
+            'a' : [1,2,3], # linear
+            'b' : [1,2,3]  # linear
+        }
+        optimiser = op.BayesianOptimisationOptimiser(ranges)
+        self.assertEquals(optimiser.config_to_point({'a':2,'b':3}).tolist(), [[2,3]])
+
+        ranges = {
+            'a' : [1,10,100] # logarithmic
+        }
+        optimiser = op.BayesianOptimisationOptimiser(ranges)
+        self.assertEquals(optimiser.config_to_point({'a':np.exp(1)}).tolist(), [[1]])
+
     def test_point_to_config(self):
         ranges = {
             'a' : [1,2,3], # linear
@@ -413,11 +430,36 @@ class TestBayesianOptimisationUtils(unittest.TestCase):
             'c' : [1,2,3] # linear
         }
         optimiser = op.BayesianOptimisationOptimiser(ranges)
-        speed_up_optimiser(optimiser)
 
-        self.assertRaisesRegexp(ValueError, 'too many attributes', optimiser.point_to_config, np.array([[1,2,3,4]])) # point too long
         self.assertRaisesRegexp(ValueError, 'too few attributes', optimiser.point_to_config, np.array([[1]])) # point too short
         self.assertEquals(optimiser.point_to_config(np.array([[2,3]])), {'a':2,'b':5,'c':3})
+        self.assertRaisesRegexp(ValueError, 'too many attributes', optimiser.point_to_config, np.array([[1,2,3]])) # point too long
+
+        ranges = {
+            'a' : [1,2,3] # linear
+        }
+        optimiser = op.BayesianOptimisationOptimiser(ranges)
+        self.assertEquals(optimiser.point_to_config(np.array([[2]])), {'a':2})
+        ranges = {
+            'a' : [1,2,3], # linear
+            'b' : [1,2,3] # linear
+        }
+        optimiser = op.BayesianOptimisationOptimiser(ranges)
+        self.assertEquals(optimiser.point_to_config(np.array([[2,3]])), {'a':2,'b':3})
+
+        # there was a bug (too few attributes) specifically when there are trailing constant ranges
+        ranges = {
+            'a' : [1,2,3], # linear
+            'b' : [3] # linear
+        }
+        optimiser = op.BayesianOptimisationOptimiser(ranges)
+        self.assertEquals(optimiser.point_to_config(np.array([[2]])), {'a':2,'b':3})
+
+        ranges = {
+            'a' : [1,10,100] # logarithmic
+        }
+        optimiser = op.BayesianOptimisationOptimiser(ranges)
+        self.assertEquals(optimiser.point_to_config(np.array([[1]])), {'a': np.exp(1)})
 
     def test_close_to_any(self):
         sx = np.array([[1.0, 2.0], [3.0, 4.0]])

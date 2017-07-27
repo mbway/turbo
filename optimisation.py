@@ -936,8 +936,9 @@ class BayesianOptimisationOptimiser(Optimiser):
         gp_params: parameter dictionary for the Gaussian Process surrogate
             function, None will choose some sensible defaults. (See "sklearn
             gaussian process regressor")
-        max_jobs: stop posing jobs after this number has been reached. By
-            default there is no cutoff (so the search will never finish)
+        max_jobs: stop posing jobs after this number has been reached (including
+            pre-samples). By default there is no cutoff (so the search will
+            never finish)
         pre_samples: the number of samples to be taken randomly before starting
             Bayesian optimisation
         ac_num_restarts: number of restarts during the acquisition function
@@ -1073,10 +1074,17 @@ class BayesianOptimisationOptimiser(Optimiser):
         neg_acquisition_function = lambda x: -self.acquisition_function(
             x.reshape(1,-1), gp_model, self.maximise_cost, best_cost, **self.acquisition_function_params)
 
-        # self.params is ordered. Only provide bounds for the parameters that are
-        # included in self.config_to_point
-        bounds = [self.range_bounds[param] for param in self.params
-                    if self.range_types[param] in ['linear', 'logarithmic']]
+        # self.params is ordered. Only provide bounds for the parameters that
+        # are included in self.config_to_point. Provide the log-range for
+        # logarithmically spaced ranges.
+        bounds = []
+        for param in self.params:
+            type_ = self.range_types[param]
+            b = self.range_bounds[param]
+            if type_ == 'linear':
+                bounds.append(b)
+            elif type_ == 'logarithmic':
+                bounds.append(np.log(b))
 
         # minimise the negative acquisition function
         best_next_x = None
@@ -1192,8 +1200,10 @@ class BayesianOptimisationOptimiser(Optimiser):
         xs: array of points to evaluate the GP at. shape=(num_points, num_attribs)
         gp_model: the GP fitted to the past configurations
         maximise_cost: True => higher cost is better, False => lower cost is better
-        best_cost: the (actual) cost of the best known configuration (either smallest or largest depending on maximise_cost)
-        xi: a parameter >0 for exploration/exploitation trade-off. Larger => more exploration. default of 0.01 is recommended
+        best_cost: the (actual) cost of the best known configuration (either
+            smallest or largest depending on maximise_cost)
+        xi: a parameter >0 for exploration/exploitation trade-off. Larger =>
+            more exploration. The default value of 0.01 is recommended.
 
         Theory:
 
@@ -1302,23 +1312,31 @@ class BayesianOptimisationOptimiser(Optimiser):
         convert a configuration (dictionary of param:val) to a point (numpy
         array) in the parameter space that the Gaussian process uses.
 
+        As a point, constant parameters are ignored, and values from logarithmic
+        ranges are the exponents of the values. ie a value of 'n' as a point
+        corresponds to a value of e^n as a configuration.
+
         config: a dictionary of parameter names to values
-
-        note: as a point, constant parameters are ignored
-
         returns: numpy array with shape=(1,num_attribs)
         '''
         assert set(config.keys()) == set(self.ranges.keys())
-        # self.params is sorted
-        return np.array([[config[param] for param in self.params
-                if self.range_types[param] in ['linear', 'logarithmic']]])
+        elements = []
+        for param in self.params: # self.params is sorted
+            type_ = self.range_types[param]
+            if type_ == 'linear':
+                elements.append(config[param])
+            elif type_ == 'logarithmic':
+                elements.append(np.log(config[param]))
+        return np.array([elements])
 
     def point_to_config(self, point):
         '''
         convert a point (numpy array) used by the Gaussian process into a
         configuration (dictionary of param:val).
 
-        note: as a point, constant parameters are ignored
+        As a point, constant parameters are ignored, and values from logarithmic
+        ranges are the exponents of the values. ie a value of 'n' as a point
+        corresponds to a value of e^n as a configuration.
 
         returns: a configuration dict with all parameters included
         '''
@@ -1328,13 +1346,20 @@ class BayesianOptimisationOptimiser(Optimiser):
         pi = 0 # current point index
         for param in self.params: # self.params is sorted
             type_ = self.range_types[param]
+
             if type_ == 'constant':
                 config[param] = self.ranges[param][0] # only 1 choice
             else:
-                # type_ = linear or logarithmic
-                if pi >= point.shape[1]: raise ValueError('point has too few attributes')
-                config[param] = point[0,pi]
+                if pi >= point.shape[1]:
+                    raise ValueError('point has too few attributes')
+                val = point[0,pi]
                 pi += 1
+
+                if type_ == 'linear':
+                    config[param] = val
+                elif type_ == 'logarithmic':
+                    config[param] = np.exp(val)
+
 
         if pi != point.shape[1]: raise ValueError('point has too many attributes')
 
@@ -1371,6 +1396,10 @@ class BayesianOptimisationOptimiser(Optimiser):
         '''
         assert step in self.step_log.keys(), 'step not recorded in the log'
 
+        type_ = self.range_types[param]
+        assert type_ in ['linear', 'logarithmic']
+        is_log = type_ == 'logarithmic' # whether the range of the chosen parameter is logarithmic
+
         s = dotdict(self.step_log[step])
         xs = self.ranges[param]
 
@@ -1384,6 +1413,9 @@ class BayesianOptimisationOptimiser(Optimiser):
             (' (chosen at random)' if s.chosen_at_random else '')), fontsize=14)
         ax1.margins(0.01, 0.1)
         ax2.margins(0.01, 0.1)
+        if is_log:
+            ax1.set_xscale('log')
+            ax2.set_xscale('log')
         plt.subplots_adjust(hspace=0.3)
 
         #plt.subplot(2, 1, 1) # nrows, ncols, plot_number
@@ -1422,7 +1454,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         ax1.legend()
 
         #plt.subplot(2, 1, 2) # nrows, ncols, plot_number
-        ax2.set_xlabel('parameter: ' + param)
+        ax2.set_xlabel('parameter {}'.format(param))
         ax2.set_ylabel(self.acquisition_function_name)
         ax2.set_title('acquisition function')
 
