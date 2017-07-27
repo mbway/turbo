@@ -207,10 +207,10 @@ class TestOptimiser(unittest.TestCase):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        optimiser = op.RandomSearchOptimiser(ranges, allow_re_tests=allow_re_tests, max_jobs=100)
+        optimiser = op.RandomSearchOptimiser(ranges, allow_re_tests=allow_re_tests)
         evaluator = TestEvaluator()
 
-        optimiser.run_sequential(evaluator)
+        optimiser.run_sequential(evaluator, max_jobs=100)
 
         self.assertTrue('Traceback' not in optimiser.log_record)
         self.assertTrue('Exception' not in optimiser.log_record)
@@ -438,12 +438,12 @@ class TestBayesianOptimisation(unittest.TestCase):
             def test_config(self, config):
                 return config.a + config.b # placeholder cost function
 
-        optimiser = op.BayesianOptimisationOptimiser(ranges, acquisition_function=acquisition_function, max_jobs=30)
+        optimiser = op.BayesianOptimisationOptimiser(ranges, acquisition_function=acquisition_function)
         evaluator = TestEvaluator()
 
         self.assertEqual(optimiser.best_sample(), None)
 
-        optimiser.run_sequential(evaluator)
+        optimiser.run_sequential(evaluator, max_jobs=30)
 
         #print(optimiser.log_record)
         self.assertTrue('Traceback' not in optimiser.log_record)
@@ -458,12 +458,12 @@ class TestBayesianOptimisation(unittest.TestCase):
             def test_config(self, config):
                 return config.a + config.b # placeholder cost function
 
-        optimiser = op.BayesianOptimisationOptimiser(ranges, maximise_cost=True, acquisition_function='UCB', max_jobs=30)
+        optimiser = op.BayesianOptimisationOptimiser(ranges, maximise_cost=True, acquisition_function='UCB')
         evaluator = TestEvaluator()
 
         self.assertEqual(optimiser.best_sample(), None)
 
-        optimiser.run_sequential(evaluator)
+        optimiser.run_sequential(evaluator, max_jobs=30)
 
         #print(optimiser.log_record)
         self.assertTrue('Traceback' not in optimiser.log_record)
