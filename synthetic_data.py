@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns # prettify matplotlib
+import sklearn.gaussian_process as gp
 
 import sys
 if sys.version_info[0] == 3: # python 3
@@ -191,6 +192,22 @@ class Data1D:
                     break
         self.populated = np.array([1 if p else 0 for p in self.populated_b])
 
+        gp_params = dict(
+            alpha = 0.13, # noise level
+            kernel = gp.kernels.RBF(length_scale=2.4),
+            n_restarts_optimizer = 2,
+            normalize_y = True
+        )
+        gp_params = dict(
+            alpha = 0.13, # noise level
+            kernel = gp.kernels.RBF(length_scale=13),
+            n_restarts_optimizer = 9,
+        )
+        gp_model = gp.GaussianProcessRegressor(**gp_params)
+        gp_model.fit(self.x, self.y)
+        self.gp_mus, self.gp_sigmas = gp_model.predict(self.full_x, return_std=True)
+        self.gp_sigmas = make2D(self.gp_sigmas)
+
         # Jeremy says this has no theoretical grounding :(
         '''
         # larger noise
@@ -201,12 +218,20 @@ class Data1D:
         '''
 
 
-    def plot_samples(self, show_populated=True):
+    def plot_samples(self, show_exact=True, show_populated=True, show_gp=True):
         plt.figure(figsize=(16,8))
         plt.plot(self.x, self.y, 'b.', label='data')
-        plt.plot(self.full_x, self.full_exact_y, 'g-', label='generator')
+        if show_exact:
+            plt.plot(self.full_x, self.full_exact_y, 'g-', label='generator')
         if show_populated:
             plt.plot(self.full_x, self.populated, 'r-', label='populated')
+        if show_gp:
+            plt.plot(self.full_x, self.gp_mus, 'm-', label='gp mean')
+            n_sigma = 2
+            s = n_sigma*self.gp_sigmas.flatten()
+            m = self.gp_mus.flatten()
+            plt.fill_between(self.full_x.flatten(), m-s, m+s, alpha=0.3,
+                         color='mediumpurple', label='gp ${}\\sigma$'.format(n_sigma))
         plt.margins(0.1, 0.1)
         plt.legend(loc='upper left')
         plt.show()

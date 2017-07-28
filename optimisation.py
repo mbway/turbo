@@ -459,7 +459,7 @@ class Optimiser(object):
         ))
         for i,s in enumerate(samples):
             self._log('\tsample {:02}: config={}, cost={:.2g}{}'.format(
-                i, config_string(s.config), s.cost,
+                i, config_string(s.config, precise=True), s.cost,
                 (' (current best)' if self.sample_is_best(s) else '')
             ))
 
@@ -836,7 +836,7 @@ class Optimiser(object):
 
     def save_progress(self, filename):
         '''
-        save the progress of the optimisation to a JSON string which can be
+        save the progress of the optimisation to a JSON file which can be
         re-loaded and continued. The optimiser must not be running for the state
         to be saved.
 
@@ -844,11 +844,18 @@ class Optimiser(object):
         '''
         #TODO make sure stopped in a good state before saving
 
+        # keep counting until a filename is available
         if os.path.isfile(filename):
-            raise Exception('File "{}" already exists!'.format(filename))
-        else:
-            with open(filename, 'w') as f:
-                f.write(json.dumps(self._save_dict(), indent=4, cls=NumpyJSONEncoder))
+            print('File "{}" already exists!'.format(filename))
+            name, ext = os.path.splitext(filename)
+            count = 1
+            while os.path.isfile(name + str(count) + ext):
+                count += 1
+            filename = name + str(count) + ext
+            print('writing to "{}" instead'.format(filename))
+
+        with open(filename, 'w') as f:
+            f.write(json.dumps(self._save_dict(), indent=4, cls=NumpyJSONEncoder))
 
     def load_progress(self, filename):
         '''
@@ -873,7 +880,7 @@ class Optimiser(object):
             'samples' : [(s.config, s.cost) for s in self.samples],
             'num_started_jobs' : self.num_started_jobs,
             'num_finished_jobs' : self.num_finished_jobs,
-            'finished_job_ids' : self.finished_job_ids,
+            'finished_job_ids' : list(self.finished_job_ids),
             'duration' : self.duration,
             'log' : self.log_record,
             # convenience for viewing the save, but will not be loaded
@@ -888,7 +895,7 @@ class Optimiser(object):
         self.samples = [Sample(dotdict(config), cost) for config, cost in save['samples']]
         self.num_started_jobs = save['num_started_jobs']
         self.num_finished_jobs = save['num_finished_jobs']
-        self.finished_job_ids = save['finished_job_ids']
+        self.finished_job_ids = set(save['finished_job_ids'])
         self.duration = save['duration']
         self.log_record = save['log']
 
@@ -1583,12 +1590,12 @@ class BayesianOptimisationOptimiser(Optimiser):
             return self.config_to_point(c)
         points = np.vstack([perturb(x) for x in xs])
 
-        mu, sigma = gp_model.predict(points, return_std=True)
-        mu = mu.flatten()
+        mus, sigmas = gp_model.predict(points, return_std=True)
+        mus = mus.flatten()
 
         #TODO: fit the view to the cost function, don't expand to fit in the uncertainty
-        ax1.plot(xs, mu, 'm-', label='surrogate cost')
-        ax1.fill_between(xs, mu - n_sigma*sigma, mu + n_sigma*sigma, alpha=0.3,
+        ax1.plot(xs, mus, 'm-', label='surrogate cost')
+        ax1.fill_between(xs, mus - n_sigma*sigmas, mus + n_sigma*sigmas, alpha=0.3,
                          color='mediumpurple', label='uncertainty ${}\\sigma$'.format(n_sigma))
         ax1.axvline(x=s.next_x[param])
 
