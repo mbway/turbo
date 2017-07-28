@@ -876,6 +876,7 @@ class Optimiser(object):
             'finished_job_ids' : self.finished_job_ids,
             'duration' : self.duration,
             'log' : self.log_record,
+            # convenience for viewing the save, but will not be loaded
             'best_sample' : {'config' : best.config, 'cost' : best.cost}
         }
 
@@ -1148,6 +1149,18 @@ class BayesianOptimisationOptimiser(Optimiser):
             self._log('param "{}": detected type: {}, bounds: [{}, {}]'.format(
                 param, self.range_types[param], low, high))
 
+        # Only provide bounds for the parameters that are included in
+        # self.config_to_point. Provide the log(lower), log(upper) bounds for
+        # logarithmically spaced ranges.
+        self.point_bounds = []
+        for param in self.params: # self.params is ordered
+            type_ = self.range_types[param]
+            low, high = self.range_bounds[param]
+            if type_ == 'linear':
+                self.point_bounds.append((low, high))
+            elif type_ == 'logarithmic':
+                self.point_bounds.append((np.log(low), np.log(high)))
+
         # not ready for a next configuration until the job with id ==
         # self.wait_until has been processed
         self.wait_for_job = None
@@ -1216,18 +1229,6 @@ class BayesianOptimisationOptimiser(Optimiser):
         neg_acquisition_function = lambda x: -self.acquisition_function(
             x.reshape(1,-1), gp_model, self.maximise_cost, best_cost, **self.acquisition_function_params)
 
-        # self.params is ordered. Only provide bounds for the parameters that
-        # are included in self.config_to_point. Provide the log-range for
-        # logarithmically spaced ranges.
-        bounds = []
-        for param in self.params:
-            type_ = self.range_types[param]
-            b = self.range_bounds[param]
-            if type_ == 'linear':
-                bounds.append(b)
-            elif type_ == 'logarithmic':
-                bounds.append(np.log(b))
-
         # minimise the negative acquisition function
         best_next_x = None
         best_neg_ac = inf # negative acquisition function value for best_next_x
@@ -1240,7 +1241,7 @@ class BayesianOptimisationOptimiser(Optimiser):
             result = scipy.optimize.minimize(
                 fun=neg_acquisition_function,
                 x0=starting_point,
-                bounds=bounds,
+                bounds=self.point_bounds,
                 method='L-BFGS-B', # Limited-Memory Broyden-Fletcher-Goldfarb-Shanno Bounded
                 options=dict(maxiter=15000) # maxiter=15000 is default
             )
@@ -1500,7 +1501,6 @@ class BayesianOptimisationOptimiser(Optimiser):
                 elif type_ == 'logarithmic':
                     config[param] = np.exp(val)
 
-
         if pi != point.shape[1]: raise ValueError('point has too many attributes')
 
         return dotdict(config)
@@ -1508,10 +1508,14 @@ class BayesianOptimisationOptimiser(Optimiser):
 
 
     def _save_dict(self):
-        raise NotImplemented # TODO
+        save = super(self.__class__, self)._save_dict()
+        save['step_log'] = self.step_log
+        return save
 
     def _load_dict(self, save):
-        raise NotImplemented # TODO
+        super(self.__class__, self)._load_dict(save)
+        self.step_log = save['step_log']
+
 
 
     def plot_step_slice(self, param, step, true_cost=None, log_ac=False, n_sigma=2):
