@@ -10,8 +10,9 @@ def client(host, port):
             return config.a
 
     evaluator = MyEvaluator()
-    evaluator.noisy = True
-    evaluator.run_client(host, port)
+    #evaluator.noisy = True
+    task = lambda: evaluator.run_client(host, port)
+    op.interactive(evaluator, task, '/tmp/evaluator.log')
 
 def server(host, port):
     ranges = {
@@ -21,8 +22,9 @@ def server(host, port):
     }
     #optimiser = op.BayesianOptimisationOptimiser(ranges)
     optimiser = op.GridSearchOptimiser(ranges)
-    optimiser.noisy = True # print log output
-    optimiser.run_server(host, port, max_jobs=20)
+    #optimiser.noisy = True # print log output
+    task = lambda: optimiser.run_server(host, port, max_jobs=20)
+    op.interactive(optimiser, task, '/tmp/optimiser.log')
 
 def get_arg(i, default=None):
     if len(sys.argv) > i:

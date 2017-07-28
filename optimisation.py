@@ -1634,35 +1634,61 @@ class BayesianOptimisationOptimiser(Optimiser):
         return fig
 
 
+def interactive(loggable, run_task, log_filename=None, poll_interval=0.5):
+    '''
+    run a task related to a loggable object (eg Optimiser server or Evaluator
+    client) in the background while printing its output, catching any
+    KeyboardInterrupts and shutting down the loggable object gracefully when one
+    occurs.
 
-def monitor_to_file(optimiser, evaluator):
+    Evaluator example:
+    >>> evaluator = MyEvaluator()
+    >>> task = lambda: evaluator.run_client(host, port)
+    >>> op.interactive(evaluator, task, '/tmp/evaluator.log')
+
+    Optimiser example
+    >>> optimiser = op.GridSearchOptimiser(ranges)
+    >>> task = lambda: optimiser.run_server(host, port, max_jobs=20)
+    >>> op.interactive(optimiser, task, '/tmp/optimiser.log')
+
+    loggable: an object with a log_record and stop_flag attributes
+    run_task: a function to run (related to the loggable object),
+        eg lambda: optimiser.run_sequential(my_evaluator)
+    log_filename: filename to write the log to (recommend somewhere in /tmp/) or
+        None to not write.
+    poll_interval: time to sleep between checking if the log has been updated
     '''
-    A helper function to monitor the logs of the optimiser and LocalEvaluator
-    and redirect them to files in /tmp
-    '''
-    op_file = '/tmp/optimiser.log'
-    ev_file = '/tmp/evaluator.log'
-    print('logging to:')
-    print(op_file)
-    print(ev_file)
-    with open(op_file, 'w') as o, open(ev_file, 'w') as e:
+    thread = threading.Thread(target=run_task)
+    thread.start()
+    f = None
+    amount_printed = 0
+
+    def print_more():
+        ''' print everything that has been added to the log since amount_printed '''
+        length = len(loggable.log_record)
+        if length > amount_printed:
+            more = loggable.log_record[amount_printed:length]
+            print(more, end='')
+            if f is not None:
+                f.write(more)
+                f.flush()
+        return length
+
+    try:
+        f = open(log_filename, 'w') if log_filename is not None else None
         try:
-            while optimiser.running or not evaluator.done:
-                # offset=0, whence=0 => absolute from beginning
-                o.seek(0, 0)
-                o.write(optimiser.log_record)
-                o.flush()
-
-                e.seek(0, 0)
-                e.write(evaluator.log_record)
-                e.flush()
-
-                time.sleep(1)
-            print('both the optimiser and evaluator have stopped')
+            while thread.is_alive():
+                amount_printed = print_more()
+                time.sleep(poll_interval)
         except KeyboardInterrupt:
-            print('interrupt caught, monitoring has stopped')
-        finally:
-            message = '\n\n--NO LONGER MONITORING--'
-            o.write(message)
-            e.write(message)
+            print('-- KeyboardInterrupt caught, stopping gracefully --')
+            loggable.stop_flag.set()
+            thread.join()
+
+        # finish off anything left not printed
+        print_more()
+        print('-- interactive task finished -- ')
+    finally:
+        if f is not None:
+            f.close()
 
