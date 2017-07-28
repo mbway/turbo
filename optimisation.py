@@ -455,16 +455,23 @@ class Optimiser(object):
 
 # Running Optimisation
 
-    def _next_job(self):
+    def _wait_for_ready(self):
         '''
-        get the next configuration and return a job object for it (or return
-        None if there are no more configurations)
+        wait for the optimiser to be ready to produce another configuration to
+        test. Has no effect if already ready.
         '''
         if not self._ready_for_next_configuration():
             self._log('not ready for the next configuration yet')
             while not self._ready_for_next_configuration():
                 time.sleep(0.1)
             self._log('now ready for next configuration')
+
+    def _next_job(self):
+        '''
+        get the next configuration and return a job object for it (or return
+        None if there are no more configurations)
+        '''
+        self._wait_for_ready()
 
         job_num = self.num_started_jobs+1 # job number is 1-based
 
@@ -614,11 +621,19 @@ class Optimiser(object):
 
                 with lock: self._log('connection accepted from {}:{}'.format(*addr))
 
-                job = self._next_job()
-                if job is None:
-                    out_of_configs = True
-                    break
-                started_job_ids.add(job.num)
+                # don't want to wait for the next configuration while holding the lock
+                # since this may result in deadlock
+                self._wait_for_ready()
+
+                # don't want finished samples to be added during the Bayes step
+                with lock:
+                    # will wait for ready again, but should have no effect since
+                    # the optimiser is now ready
+                    job = self._next_job()
+                    if job is None:
+                        out_of_configs = True
+                        break
+                    started_job_ids.add(job.num)
 
                 pool.apply_async(self._handle_client, (conn, lock, exception_in_pool, job))
                 #self._handle_client(conn, lock, exception_in_pool, job)
@@ -1120,7 +1135,7 @@ class BayesianOptimisationOptimiser(Optimiser):
     def __init__(self, ranges, maximise_cost=False,
                  acquisition_function='EI', acquisition_function_params=dict(),
                  gp_params=None, pre_samples=4, ac_num_restarts=10,
-                 close_tolerance=1e-5):
+                 close_tolerance=1e-5, allow_parallel=True):
         '''
         acquisition_function: the function to determine where to sample next
             either a function or a string with the name of the function (eg 'EI')
@@ -1143,6 +1158,9 @@ class BayesianOptimisationOptimiser(Optimiser):
             Instead, when the next sample is to be 'close' to any of the points
             sampled before (ie squared Euclidean distance <= close_tolerance),
             sample a random point instead.
+        allow_parallel: whether to hypothesise about the results of ongoing jobs
+            in order to start another job in parallel. (useful when running a
+            server with multiple client evaluators).
         '''
         ranges = {param:np.array(range_) for param,range_ in ranges.items()} # numpy arrays are required
         super(self.__class__, self).__init__(ranges, maximise_cost)
@@ -1208,14 +1226,21 @@ class BayesianOptimisationOptimiser(Optimiser):
             elif type_ == 'logarithmic':
                 self.point_bounds.append((np.log(low), np.log(high)))
 
+
+        self.allow_parallel = allow_parallel
         # not ready for a next configuration until the job with id ==
-        # self.wait_until has been processed
+        # self.wait_until has been processed. Not used when allow_parallel.
         self.wait_for_job = None
+        # estimated samples for ongoing jobs. list of (job_num, Sample). Not
+        # used when (not allow_parallel)
+        self.hypothesised_samples = []
 
         # a log of the Bayesian optimisation steps
         # dict of job number to dict with values:
         #
         # sx, sy: numpy arrays corresponding to points of samples taken thus far
+        # hx, hy: numpy arrays corresponding to _hypothesised_ points of ongoing
+        #   jobs while the step was being calculated
         # best_sample: best sample so far
         # next_x: next config to test
         # next_ac: value of acquisition function evaluated at next_x (if not
@@ -1232,15 +1257,22 @@ class BayesianOptimisationOptimiser(Optimiser):
         return inf
 
     def _ready_for_next_configuration(self):
-        in_pre_phase = self.num_started_jobs < self.pre_samples
-        # all jobs from the pre-phase are finished, need the first Bayesian
-        # optimisation sample
-        pre_phase_finished = (self.wait_for_job == None and
-                              self.num_finished_jobs >= self.pre_samples)
-        # finished waiting for the last Bayesian optimisation job to finish
-        bayes_job_finished = self.wait_for_job in self.finished_job_ids
+        if self.allow_parallel:
+            # wait for all of the pre-phase samples to be taken before starting
+            # the Bayesian optimisation steps. Otherwise always ready.
+            waiting_for_pre_phase = (self.num_started_jobs >= self.pre_samples and
+                                     self.num_finished_jobs < self.pre_samples)
+            return not waiting_for_pre_phase
+        else:
+            in_pre_phase = self.num_started_jobs < self.pre_samples
+            # all jobs from the pre-phase are finished, need the first Bayesian
+            # optimisation sample
+            pre_phase_finished = (self.wait_for_job == None and
+                                self.num_finished_jobs >= self.pre_samples)
+            # finished waiting for the last Bayesian optimisation job to finish
+            bayes_job_finished = self.wait_for_job in self.finished_job_ids
 
-        return in_pre_phase or pre_phase_finished or bayes_job_finished
+            return in_pre_phase or pre_phase_finished or bayes_job_finished
 
     def trim_step_log(self, keep=-1):
         '''
@@ -1312,6 +1344,94 @@ class BayesianOptimisationOptimiser(Optimiser):
             # it the positive acquisition function value
             return best_next_x.reshape(1,-1), -best_neg_ac
 
+    def _bayes_step(self, job_num):
+        '''
+        generate the next configuration to test using Bayesian optimisation
+        '''
+        # samples converted to points which can be used in calculations
+        # shape=(num_samples, num_attribs)
+        sx = np.vstack([self.config_to_point(s.config) for s in self.samples])
+        # shape=(num_samples, 1)
+        sy = np.array([[s.cost] for s in self.samples])
+
+        # if running parallel jobs: add hypothesised samples to the data set to
+        # fit the surrogate cost function to. If running serial: mark this job
+        # as having to finish before proceeding
+        if self.allow_parallel:
+            # remove samples whose jobs have since finished
+            self.hypothesised_samples = [(job_num, s) for job_num, s in self.hypothesised_samples
+                                         if job_num not in self.finished_job_ids]
+
+            if len(self.hypothesised_samples) > 0:
+                hx = np.vstack([self.config_to_point(s.config)
+                                for job_num, s in self.hypothesised_samples])
+                hy = np.array([[s.cost] for job_num, s in self.hypothesised_samples])
+            else:
+                hx = np.empty(shape=(0,sx.shape[1]))
+                hy = np.empty(shape=(0,1))
+        else:
+            self.wait_for_job = job_num # do not add a new job until this job has been processed
+
+            hx = np.empty(shape=(0,sx.shape[1]))
+            hy = np.empty(shape=(0,1))
+
+        # combination of the true samples (sx, sy) and the hypothesised samples
+        # (hx, hy) if there are any
+        xs = np.vstack([sx, hx])
+        ys = np.vstack([sy, hy])
+
+        # setting up a new model each time shouldn't be too wasteful and it
+        # has the benefit of being easily reproducible (eg for plotting)
+        # because the model is definitely 'clean' each time. In my tests,
+        # there was no perceptible difference in timing.
+        gp_model = gp.GaussianProcessRegressor(**self.gp_params)
+        gp_model.fit(xs, ys)
+
+        # best known configuration and the corresponding cost of that configuration
+        best_sample = self.best_sample()
+
+        next_x, next_ac = self._maximise_acquisition(gp_model, best_sample.cost)
+
+        # next_x as chosen by the acquisition function maximisation (for the step log)
+        argmax_acquisition = next_x
+
+        # maximising the acquisition function failed
+        if next_x is None:
+            self._log('choosing random sample because maximising acquisition function failed')
+            next_x = self._unique_random_config(different_from=xs, num_attempts=1000)
+            next_ac = 0
+            chosen_at_random = True
+        # acquisition function successfully maximised, but the resulting configuration would break the GP.
+        # having two samples too close together will 'break' the GP
+        elif close_to_any(next_x, xs, self.close_tolerance):
+            self._log('choosing random sample to avoid samples being too close')
+            next_x = self._unique_random_config(different_from=xs, num_attempts=1000)
+            next_ac = 0
+            chosen_at_random = True
+        else:
+            next_x = self.point_to_config(next_x)
+            chosen_at_random = False
+
+        if self.allow_parallel:
+            # use the GP to estimate the cost of the configuration, later jobs
+            # can use this guess to determine where to sample next
+            est_cost = gp_model.predict(self.config_to_point(next_x))
+            est_cost = np.asscalar(est_cost) # ndarray of shape=(1,1) is returned from predict()
+            self.hypothesised_samples.append((job_num, Sample(next_x, est_cost)))
+
+        self.step_log[job_num] = dict(
+            sx=sx, sy=sy,
+            hx=hx, hy=hy,
+            best_sample=best_sample,
+            next_x=next_x, next_ac=next_ac, # chosen_at_random => next_ac=0
+            chosen_at_random=chosen_at_random,
+            argmax_acquisition=argmax_acquisition # different to next_x when chosen_at_random
+        )
+        self.trim_step_log()
+
+        return next_x
+
+
     def _next_configuration(self, job_num):
         if self.num_started_jobs < self.pre_samples:
             # still in the pre-phase where samples are chosen at random
@@ -1329,57 +1449,7 @@ class BayesianOptimisationOptimiser(Optimiser):
                 return config
         else:
             # Bayesian optimisation
-            self.wait_for_job = job_num # do not add a new job until this job has been processed
-
-            # samples converted to points which can be used in calculations
-            # shape=(num_samples, num_attribs)
-            sx = np.vstack([self.config_to_point(s.config) for s in self.samples])
-            # shape=(num_samples, 1)
-            sy = np.array([[s.cost] for s in self.samples])
-
-            # setting up a new model each time shouldn't be too wasteful and it
-            # has the benefit of being easily reproducible (eg for plotting)
-            # because the model is definitely 'clean' each time. In my tests,
-            # there was no perceptible difference in timing.
-            gp_model = gp.GaussianProcessRegressor(**self.gp_params)
-            gp_model.fit(sx, sy)
-
-            # best known configuration and the corresponding cost of that configuration
-            best_sample = self.best_sample()
-
-            next_x, next_ac = self._maximise_acquisition(gp_model, best_sample.cost)
-
-            # next_x as chosen by the acquisition function maximisation (for the step log)
-            argmax_acquisition = next_x
-
-            # maximising the acquisition function failed
-            if next_x is None:
-                self._log('choosing random sample because maximising acquisition function failed')
-                next_x = self._unique_random_config(different_from=sx, num_attempts=1000)
-                next_ac = 0
-                chosen_at_random = True
-            # acquisition function successfully maximised, but the resulting configuration would break the GP.
-            # having two samples too close together will 'break' the GP
-            elif close_to_any(next_x, sx, self.close_tolerance):
-                self._log('choosing random sample to avoid samples being too close')
-                next_x = self._unique_random_config(different_from=sx, num_attempts=1000)
-                next_ac = 0
-                chosen_at_random = True
-            else:
-                next_x = self.point_to_config(next_x)
-                chosen_at_random = False
-
-            self.step_log[job_num] = dict(
-                sx=sx, sy=sy,
-                best_sample=best_sample,
-                next_x=next_x, next_ac=next_ac, # chosen_at_random => next_ac=0
-                chosen_at_random=chosen_at_random,
-                argmax_acquisition=argmax_acquisition # different to next_x when chosen_at_random
-            )
-            self.trim_step_log()
-
-            return next_x
-
+            return self._bayes_step(job_num)
 
 
     @staticmethod
@@ -1592,11 +1662,15 @@ class BayesianOptimisationOptimiser(Optimiser):
         is_log = type_ == 'logarithmic' # whether the range of the chosen parameter is logarithmic
 
         s = dotdict(self.step_log[step])
-        xs = self.ranges[param]
+        all_xs = self.ranges[param]
 
+        # combination of the true samples (sx, sy) and the hypothesised samples
+        # (hx, hy) if there are any
+        xs = np.vstack([s.sx, s.hx])
+        ys = np.vstack([s.sy, s.hy])
 
         gp_model = gp.GaussianProcessRegressor(**self.gp_params)
-        gp_model.fit(s.sx, s.sy)
+        gp_model.fit(xs, ys)
 
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 10))
         fig.suptitle('Bayesian Optimisation step {}{}'.format(
@@ -1615,12 +1689,24 @@ class BayesianOptimisationOptimiser(Optimiser):
         ax1.set_title('Surrogate objective function')
 
         if true_cost is not None:
-            ax1.plot(xs, true_cost, 'k--', label='true cost')
+            ax1.plot(all_xs, true_cost, 'k--', label='true cost')
 
+        # get the value for the parameter 'param' from the given point
+        param_from_point = lambda p: self.point_to_config(p.reshape(1,-1))[param]
         # plot samples projected onto the `param` axis
         # reshape needed because using x in sx reduces each row to a 1D array
-        sample_xs = [self.point_to_config(x.reshape(1,-1))[param] for x in s.sx]
+        sample_xs = [param_from_point(x) for x in s.sx]
         ax1.plot(sample_xs, s.sy, 'bo', label='samples') #TODO: plot best specially
+
+        if len(s.hx) > 0:
+            # there are some hypothesised samples
+            hypothesised_xs = [param_from_point(x) for x in s.hx]
+            ax1.plot(hypothesised_xs, s.hy, 'o', color='tomato', label='hypothesised samples')
+
+        # index of the best current real sample
+        best_i  = np.argmax(s.sy) if self.maximise_cost else np.argmin(s.sy)
+        ax1.plot(s.sx[best_i], s.sy[best_i], '*', markersize=15, color='deepskyblue', zorder=10, label='best sample')
+
 
         # take the next_x configuration and perturb the parameter `param` while leaving the others intact
         # this essentially produces a line through the parameter space to predict uncertainty along
@@ -1628,14 +1714,14 @@ class BayesianOptimisationOptimiser(Optimiser):
             c = s.next_x.copy()
             c[param] = x
             return self.config_to_point(c)
-        points = np.vstack([perturb(x) for x in xs])
+        points = np.vstack([perturb(x) for x in all_xs])
 
         mus, sigmas = gp_model.predict(points, return_std=True)
         mus = mus.flatten()
 
         #TODO: fit the view to the cost function, don't expand to fit in the uncertainty
-        ax1.plot(xs, mus, 'm-', label='surrogate cost')
-        ax1.fill_between(xs, mus - n_sigma*sigmas, mus + n_sigma*sigmas, alpha=0.3,
+        ax1.plot(all_xs, mus, 'm-', label='surrogate cost')
+        ax1.fill_between(all_xs, mus - n_sigma*sigmas, mus + n_sigma*sigmas, alpha=0.3,
                          color='mediumpurple', label='uncertainty ${}\\sigma$'.format(n_sigma))
         ax1.axvline(x=s.next_x[param])
 
@@ -1662,8 +1748,8 @@ class BayesianOptimisationOptimiser(Optimiser):
         #ax2.set_xlim(s.next_x[param]-1, s.next_x[param]+1)
         #ax2.set_ylim((0.0, s.next_ac))
 
-        ax2.plot(xs, ac, '-', color='g', linewidth=1.0, label=label)
-        ax2.fill_between(xs, np.zeros_like(xs), ac.flatten(), alpha=0.3, color='palegreen')
+        ax2.plot(all_xs, ac, '-', color='g', linewidth=1.0, label=label)
+        ax2.fill_between(all_xs, np.zeros_like(all_xs), ac.flatten(), alpha=0.3, color='palegreen')
 
         ax2.axvline(x=s.next_x[param])
         # may not want to plot if chosen_at_random because next_ac will be incorrect (ie 0)
