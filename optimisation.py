@@ -195,19 +195,30 @@ class Job(object):
 
 class Sample(object):
     '''
-    a sample is a configuration and its corresponding cost as determined by an evaluator.
+    a sample is a configuration and its corresponding cost as determined by an
+    evaluator. Potentially also stores information of interest in 'extra'.
     '''
-    def __init__(self, config, cost):
+    def __init__(self, config, cost, extra=dict()):
+        '''
+        extra: miscellaneous information about the sample. Not used by the
+            optimiser but can be used to store useful information for later. The
+            extra information will be saved along with the rest of the sample data.
+        '''
         self.config = config
         self.cost = cost
+        self.extra = extra
     def __repr__(self):
-        return '(config={}, cost={})'.format(config_string(self.config), self.cost)
-    def __iter__(self):
-        ''' so you can write my_config, my_cost = my_sample '''
-        yield self.config
-        yield self.cost
+        ''' used in unit tests '''
+        if self.extra: # not empty
+            return '(config={}, cost={}, extra={})'.format(
+                config_string(self.config), self.cost, self.extra)
+        else:
+            return '(config={}, cost={})'.format(config_string(self.config), self.cost)
     def __eq__(self, other):
-        return self.config == other.config and self.cost == other.cost
+        ''' used in unit tests '''
+        return (self.config == other.config and
+                self.cost == other.cost and
+                self.extra == other.extra)
 
 
 def send_json(conn, obj, encoder=None):
@@ -337,10 +348,10 @@ class Evaluator(object):
 
                 self.log('evaluating job {}: config: {}'.format(job_num, config_string(config, precise=True)))
                 results = self.test_config(config)
+                samples = Evaluator._samples_from_test_results(results, config)
 
-                # evaluator can return either a list of samples, or just a cost
-                samples = results if isinstance(results, list) else [Sample(config, results)]
-                samples = [{'config':s.config,'cost':s.cost} for s in samples] # for JSON serialisation
+                # for JSON serialisation
+                samples = [(s.config, s.cost, s.extra) for s in samples]
 
                 self.log('returning results: {}'.format(results))
                 send_json(sock, { 'samples' : samples }, encoder=NumpyJSONEncoder)
@@ -358,12 +369,43 @@ class Evaluator(object):
         if self.noisy:
             print(string, end=('\n' if newline else ''))
 
+    @staticmethod
+    def _samples_from_test_results(results, config):
+        '''
+        An evaluator may return several different things from test_config. This
+        function converts those results into a standard form: a list of Sample
+        objects.
+        '''
+        # evaluator can return either a cost value, a sample object or a list of sample objects
+        if is_numeric(results):
+            # evaluator returned cost
+            samples = [Sample(config, results)]
+        elif (isinstance(results, tuple) and len(results) == 2 and
+            is_numeric(results[0]) and isinstance(results[1], dict)):
+            # evaluator returned cost and extra as a tuple
+            samples = [Sample(config, results[0], results[1])]
+        elif isinstance(results, Sample):
+            # evaluator returned a single sample
+            samples = [results]
+        elif isinstance(results, list) and all(isinstance(r, Sample) for r in results):
+            # evaluator returned a list of samples
+            samples = results
+        else:
+            raise ValueError('invalid results type from evaluator')
+        return samples
+
     def test_config(self, config):
         '''
-        given a configuration, evaluate and return its cost. Can also test
-        multiple configurations based on the given config and return a list of
-        Sample objects (eg could run multiple times if there is some randomness,
-        or could introduce another parameter which is cheap to test)
+        given a configuration, evaluate it and return one of the following:
+            - number corresponding to the cost of the configuration
+            - a tuple of (cost, 'extra' dict)
+                'extra' data can be anything (not used directly by the optimiser
+                but useful for storage).
+            - Sample object
+            - list of Sample objects (of any length including 0)
+                returning multiple samples may be advantageous in certain
+                situations (such as nested optimisation or iterating over a
+                'cheap' parameter range and returning all results at once).
 
         config: dictionary of parameter names to values
         '''
@@ -446,9 +488,7 @@ class Optimiser(object):
         '''
         duration = time.time()-job.start_time
 
-        assert is_numeric(results) or isinstance(results, list), 'invalid results type from evaluator'
-        # evaluator can return either a list of samples, or just a cost
-        samples = results if isinstance(results, list) else [Sample(job.config, results)]
+        samples = Evaluator._samples_from_test_results(results, job.config)
         self.samples.extend(samples)
         self.num_finished_jobs += 1
         self.finished_job_ids.add(job.num)
@@ -502,9 +542,9 @@ class Optimiser(object):
             msg = {'num': job.num, 'config': job.config}
             send_json(conn, msg, encoder=NumpyJSONEncoder)
             results = recv_json(conn) # keep waiting until the client is done
-            # during transmission: serialised to dictionaries
-            results = [Sample(dotdict(s['config']), s['cost'])
-                       for s in results['samples']]
+            # during transmission: serialised to tuples
+            results = [Sample(dotdict(config), cost, extra)
+                       for config, cost, extra in results['samples']]
 
             with lock:
                 self._process_job_results(job, results)
@@ -877,7 +917,7 @@ class Optimiser(object):
         if best is None:
             best = Sample({}, inf)
         return {
-            'samples' : [(s.config, s.cost) for s in self.samples],
+            'samples' : [(s.config, s.cost, s.extra) for s in self.samples],
             'num_started_jobs' : self.num_started_jobs,
             'num_finished_jobs' : self.num_finished_jobs,
             'finished_job_ids' : list(self.finished_job_ids),
@@ -892,7 +932,7 @@ class Optimiser(object):
         load progress from a dictionary
         (designed to be overridden by derived classes in order to load specialised data)
         '''
-        self.samples = [Sample(dotdict(config), cost) for config, cost in save['samples']]
+        self.samples = [Sample(dotdict(config), cost, extra) for config, cost, extra in save['samples']]
         self.num_started_jobs = save['num_started_jobs']
         self.num_finished_jobs = save['num_finished_jobs']
         self.finished_job_ids = set(save['finished_job_ids'])

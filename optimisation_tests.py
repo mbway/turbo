@@ -304,6 +304,8 @@ class TestOptimiser(unittest.TestCase):
         pass
         #TODO: have the evaluator change the config before returning
     #TODO: ensure that exceptions raised by the evaluator appear in the output log
+    #TODO: test with client/server
+    #TODO: test with multiple clients with different speeds
     def test_evaluator_list(self):
         ranges = {'a':[1,2], 'b':[3,4]}
         class TestEvaluator(op.Evaluator):
@@ -330,7 +332,42 @@ class TestOptimiser(unittest.TestCase):
         self.assertEqual(optimiser.samples, samples)
         self.assertIn(optimiser.best_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
 
-        #TODO: test retuning an empty list
+    def test_evaluator_extra(self):
+        ranges = {'a':[1,2], 'b':[3,4]}
+        class TestEvaluator(op.Evaluator):
+            def test_config(self, config):
+                return op.Sample(config, config.a, extra={'test':'abc'})
+
+        optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+        evaluator = TestEvaluator()
+
+        optimiser.run_sequential(evaluator)
+
+        self.assertTrue('Traceback' not in optimiser.log_record)
+        self.assertTrue('Exception' not in optimiser.log_record)
+
+        mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost, extra={'test':'abc'}) # make sample
+        samples = [mks(1,3,1), mks(2,3,2), mks(1,4,1), mks(2,4,2)]
+
+        self.assertEqual(optimiser.samples, samples)
+        self.assertIn(optimiser.best_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
+
+    def test_evaluator_empty_list(self):
+        ranges = {'a':[1,2], 'b':[3,4]}
+        class TestEvaluator(op.Evaluator):
+            def test_config(self, config):
+                return []
+
+        optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+        evaluator = TestEvaluator()
+
+        optimiser.run_sequential(evaluator)
+
+        self.assertTrue('Traceback' not in optimiser.log_record)
+        self.assertTrue('Exception' not in optimiser.log_record)
+
+        self.assertEqual(optimiser.samples, [])
+        self.assertEqual(optimiser.best_sample(), None)
 
     # TODO: test multiple evaluators, maybe one slower than the other
 
