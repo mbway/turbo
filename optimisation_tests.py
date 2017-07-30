@@ -41,7 +41,11 @@ class TestUtils(unittest.TestCase):
     def test_time_string(self):
         self.assertEqual(op.time_string(0), '00:00')
         self.assertEqual(op.time_string(1), '00:01')
+        self.assertEqual(op.time_string(1.09), '00:01')
+        self.assertEqual(op.time_string(1.1), '00:01.1')
         self.assertEqual(op.time_string(1.5), '00:01.5')
+        self.assertEqual(op.time_string(1.9), '00:01.9')
+        self.assertEqual(op.time_string(1.90001), '00:02')
         self.assertEqual(op.time_string(60), '01:00')
         self.assertEqual(op.time_string(61.5), '01:01.5')
         self.assertEqual(op.time_string(60*60 + 61.5), '01:01:01.5')

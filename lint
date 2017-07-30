@@ -1,0 +1,10 @@
+
+# add the following comment at the top of the script to disable the stupid
+# warnings. Start with them all enabled and disable them as more things get
+# fixed
+
+
+# pylint: disable=line-too-long, too-many-lines, trailing-newlines, wrong-import-position, too-few-public-methods, too-many-instance-attributes, too-many-arguments, broad-except, too-many-locals, too-many-arguments, no-member, invalid-name
+
+pylint optimisation.py
+

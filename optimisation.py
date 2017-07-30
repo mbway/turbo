@@ -1,3 +1,7 @@
+'''
+TODO: module docstring
+'''
+
 # fix some of the python2 ugliness
 from __future__ import print_function
 from __future__ import division
@@ -6,8 +10,8 @@ if sys.version_info[0] == 3: # python 3
     from math import isclose, inf
 elif sys.version_info[0] == 2: # python 2
     inf = float('inf')
-    # implementation from the python3 documentation
     def isclose(a, b, rel_tol=1e-09, abs_tol=0.0):
+        ''' implementation from the python3 documentation '''
         return abs(a-b) <= max(rel_tol * max(abs(a), abs(b)), abs_tol)
 else:
     print('unsupported python version')
@@ -39,6 +43,7 @@ import plot3D
 
 
 PORT = 9187
+
 
 
 class dotdict(dict):
@@ -111,17 +116,29 @@ def logspace(from_, to, num_per_mag=1):
     return np.logspace(from_exp, to_exp, num=num, base=10)
 
 def time_string(seconds):
+    '''
+    given a duration in the number of seconds (not necessarily an integer),
+    format a string of the form: 'HH:MM:SS.X' where HH and X are present only
+    when required.
+    - HH is displayed if the duration exceeds 1 hour
+    - X is displayed if the time does not round to an integer when truncated to
+      1dp. eg durations ending in [.1, .9)
+    '''
     mins, secs  = divmod(seconds, 60)
     hours, mins = divmod(mins, 60)
     hours, mins = int(hours), int(mins)
 
+    dps = 1 # decimal places to display
     # if the number of seconds would round to an integer: display it as one
-    if isclose(round(secs), secs, abs_tol=1e-1):
-        secs = '{:02d}'.format(int(secs))
+    if isclose(round(secs), secs, abs_tol=10**(-dps)): # like abs_tol=1e-dps
+        secs = '{:02d}'.format(round(secs))
     else:
-        # 04 => pad with leading zeros up to a total length of 4 characters (including the decimal point)
-        # .1f => display 1 digits after the decimal point
-        secs = '{:04.1f}'.format(secs)
+        # 0N => pad with leading zeros up to a total length of N characters
+        #       (including the decimal point)
+        # .Df => display D digits after the decimal point
+        # eg for 2 digits before the decimal point and 1dp: '{:04.1f}'
+        chars = 2+1+dps # (before decimal point)+1+(after decimal point)
+        secs = ('{:0' + str(chars) +'.' + str(dps) + 'f}').format(secs)
 
     if hours > 0:
         return '{:02d}:{:02d}:{}'.format(hours, mins, secs)
@@ -141,7 +158,7 @@ def config_string(config, order=None, precise=False):
     else:
         string = '{'
         for p in order:
-            if type(config[p]) == str or type(config[p]) == np.str_:
+            if isinstance(config[p], str) or isinstance(config[p], np.str_):
                 string += '{}="{}", '.format(p, config[p])
             else: # assuming numeric
                 if precise:
@@ -198,7 +215,7 @@ class Sample(object):
     a sample is a configuration and its corresponding cost as determined by an
     evaluator. Potentially also stores information of interest in 'extra'.
     '''
-    def __init__(self, config, cost, extra=dict()):
+    def __init__(self, config, cost, extra=None):
         '''
         extra: miscellaneous information about the sample. Not used by the
             optimiser but can be used to store useful information for later. The
@@ -206,7 +223,7 @@ class Sample(object):
         '''
         self.config = config
         self.cost = cost
-        self.extra = extra
+        self.extra = {} if extra is None else extra
     def __repr__(self):
         ''' used in unit tests '''
         if self.extra: # not empty
@@ -267,29 +284,28 @@ def recv_json(conn):
         return obj
 
 
-''' Details of the network protocol between the optimiser and the evaluator
-Optimiser sets up a server and listens for clients. Every time a client
-(evaluator) connects the optimiser spawns a thread to handle the client,
-allowing it to accept more clients. In the thread for the connected client, it
-is sent a configuration (serialised as JSON) to evaluate. The message is a
-length followed by the JSON content. The thread waits for the evaluator to reply
-with the results (also JSON serialised). Once the reply has been received, the
-thread is free to handle more clients (as part of a thread pool).
-
-If a client connection is open and the optimiser wishes to shutdown, it can send
-a length of 0 to indicate 'no data' the evaluator can then resume trying to
-connect in-case the server comes back. Alternatively, when the server shuts
-down, the connection breaks (but not always). Both are used to detect a
-disconnection.
-
-When connecting to the server, there are several different ways the call to
-connect could fail. In any of these situations: simply wait a while and try
-again (without reporting an error)
-
-If an evaluator accepts a job then they are obliged to complete it. If the
-evaluator crashes or otherwise fails to produce results, the job remains in the
-queue and will never finish processing.
-'''
+# Details of the network protocol between the optimiser and the evaluator
+# Optimiser sets up a server and listens for clients. Every time a client
+# (evaluator) connects the optimiser spawns a thread to handle the client,
+# allowing it to accept more clients. In the thread for the connected client, it
+# is sent a configuration (serialised as JSON) to evaluate. The message is a
+# length followed by the JSON content. The thread waits for the evaluator to reply
+# with the results (also JSON serialised). Once the reply has been received, the
+# thread is free to handle more clients (as part of a thread pool).
+#
+# If a client connection is open and the optimiser wishes to shutdown, it can send
+# a length of 0 to indicate 'no data' the evaluator can then resume trying to
+# connect in-case the server comes back. Alternatively, when the server shuts
+# down, the connection breaks (but not always). Both are used to detect a
+# disconnection.
+#
+# When connecting to the server, there are several different ways the call to
+# connect could fail. In any of these situations: simply wait a while and try
+# again (without reporting an error)
+#
+# If an evaluator accepts a job then they are obliged to complete it. If the
+# evaluator crashes or otherwise fails to produce results, the job remains in the
+# queue and will never finish processing.
 
 class Evaluator(object):
     '''
@@ -346,31 +362,39 @@ class Evaluator(object):
                 job_num = job['num']
                 config = dotdict(job['config'])
 
-                self.log('evaluating job {}: config: {}'.format(job_num, config_string(config, precise=True)))
+                self.log('evaluating job {}: config: {}'.format(
+                    job_num, config_string(config, precise=True)))
                 results = self.test_config(config)
-                samples = Evaluator._samples_from_test_results(results, config)
+                samples = Evaluator.samples_from_test_results(results, config)
 
                 # for JSON serialisation
                 samples = [(s.config, s.cost, s.extra) for s in samples]
 
                 self.log('returning results: {}'.format(results))
-                send_json(sock, { 'samples' : samples }, encoder=NumpyJSONEncoder)
+                send_json(sock, {'samples' : samples}, encoder=NumpyJSONEncoder)
                 sock.close()
         finally:
             if sock is not None:
                 sock.close()
 
-    def log(self, string, newline=True):
-        if not isinstance(string, str):
-            string = str(string)
-        self.log_record += string
+    def log(self, msg, newline=True):
+        '''
+        write to the evaluator's log (self.log_record), if self.noisy is set
+        then the output is also printed to stdout.
+        msg: the message to append to the log. If The message is not a string it
+            will be converted to one using the `str` constructor.
+        newline: whether to append a newline character automatically
+        '''
+        if not isinstance(msg, str):
+            msg = str(msg)
         if newline:
-            self.log_record += '\n'
+            msg += '\n'
+        self.log_record += msg
         if self.noisy:
-            print(string, end=('\n' if newline else ''))
+            print(msg, end='')
 
     @staticmethod
-    def _samples_from_test_results(results, config):
+    def samples_from_test_results(results, config):
         '''
         An evaluator may return several different things from test_config. This
         function converts those results into a standard form: a list of Sample
@@ -381,7 +405,7 @@ class Evaluator(object):
             # evaluator returned cost
             samples = [Sample(config, results)]
         elif (isinstance(results, tuple) and len(results) == 2 and
-            is_numeric(results[0]) and isinstance(results[1], dict)):
+              is_numeric(results[0]) and isinstance(results[1], dict)):
             # evaluator returned cost and extra as a tuple
             samples = [Sample(config, results[0], results[1])]
         elif isinstance(results, Sample):
@@ -409,7 +433,7 @@ class Evaluator(object):
 
         config: dictionary of parameter names to values
         '''
-        raise NotImplemented
+        raise NotImplementedError
 
 
 class Optimiser(object):
@@ -444,14 +468,21 @@ class Optimiser(object):
         self.duration = 0 # total time spent (persists across runs)
 
 
-    def _log(self, string, newline=True):
-        if not isinstance(string, str):
-            string = str(string)
-        self.log_record += string
+    def _log(self, msg, newline=True):
+        '''
+        write to the optimiser's log (self.log_record), if self.noisy is set
+        then the output is also printed to stdout.
+        msg: the message to append to the log. If The message is not a string it
+            will be converted to one using the `str` constructor.
+        newline: whether to append a newline character automatically
+        '''
+        if not isinstance(msg, str):
+            msg = str(msg)
         if newline:
-            self.log_record += '\n'
+            msg += '\n'
+        self.log_record += msg
         if self.noisy:
-            print(string, end=('\n' if newline else ''))
+            print(msg, end='')
 
 # Running Optimisation
 
@@ -495,7 +526,7 @@ class Optimiser(object):
         '''
         duration = time.time()-job.start_time
 
-        samples = Evaluator._samples_from_test_results(results, job.config)
+        samples = Evaluator.samples_from_test_results(results, job.config)
         self.samples.extend(samples)
         self.num_finished_jobs += 1
         self.finished_job_ids.add(job.num)
@@ -504,7 +535,7 @@ class Optimiser(object):
             job.num, time_string(duration+job.setup_duration),
             time_string(job.setup_duration), time_string(duration)
         ))
-        for i,s in enumerate(samples):
+        for i, s in enumerate(samples):
             self._log('\tsample {:02}: config={}, cost={:.2g}{}'.format(
                 i, config_string(s.config, precise=True), s.cost,
                 (' (current best)' if self.sample_is_best(s) else '')
@@ -555,7 +586,7 @@ class Optimiser(object):
 
             with lock:
                 self._process_job_results(job, results)
-        except Exception as e:
+        except Exception:
             exception_caught.set()
             with lock:
                 self._log('Exception raised while processing job {} (in a worker thread):\n{}'.format(
@@ -602,24 +633,29 @@ class Optimiser(object):
             sock.listen(max_clients) # enable listening on the socket. backlog=max_clients
             sock.settimeout(1.0) # timeout for accept, not inherited by the client connections
 
-            while not self.stop_flag.is_set() and num_jobs < max_jobs:
+            while (not self.stop_flag.is_set() and
+                   not exception_in_pool.is_set() and
+                   num_jobs < max_jobs):
+
                 with lock:
                     self._log('outstanding job IDs: {}'.format(
                         set_str(started_job_ids-self.finished_job_ids)))
                     self._log('waiting for a connection')
 
                 # wait for a client to connect
-                while not self.stop_flag.is_set():
+                while not self.stop_flag.is_set() and not exception_in_pool.is_set():
                     try:
                         # conn is another socket object
                         conn, addr = sock.accept()
                         break
                     except socket.timeout:
                         conn = None
+                        continue
                 if self.stop_flag.is_set():
                     break
 
-                with lock: self._log('connection accepted from {}:{}'.format(*addr))
+                with lock:
+                    self._log('connection accepted from {}:{}'.format(*addr))
 
                 # don't want to wait for the next configuration while holding the lock
                 # since this may result in deadlock
@@ -640,9 +676,10 @@ class Optimiser(object):
 
                 conn = None
                 num_jobs += 1
-                with lock: self.duration = old_duration + (time.time()-run_start_time)
+                with lock:
+                    self.duration = old_duration + (time.time()-run_start_time)
 
-        except Exception as e:
+        except Exception:
             self._log('Exception raised during run:\n{}'.format(exception_string()))
             exception_caught = True
         finally:
@@ -652,7 +689,8 @@ class Optimiser(object):
 
             # finish up active jobs
             if pool is not None:
-                with lock: self._log('waiting for active jobs to finish')
+                with lock:
+                    self._log('waiting for active jobs to finish')
                 pool.close() # worker threads will exit once done
                 pool.join()
                 self._log('active jobs finished')
@@ -704,7 +742,7 @@ class Optimiser(object):
                 num_jobs += 1
                 self.duration = old_duration + (time.time()-run_start_time)
 
-        except Exception as e:
+        except Exception:
             self._log('Exception raised during run:\n{}'.format(exception_string()))
             exception_caught = True
 
@@ -730,7 +768,7 @@ class Optimiser(object):
         return the next configuration to try, or None if finished
         job_num: the ID of the job that the configuration will be assigned to
         '''
-        raise NotImplemented
+        raise NotImplementedError
 
     #TODO: change this. maybe set grid search max_jobs and use that instead
     def total_jobs(self):
@@ -757,10 +795,14 @@ class Optimiser(object):
         ''' returns whether the given sample is as good as or better than those in self.samples '''
         best = self.best_sample()
         return (best is None or
-            (self.maximise_cost and sample.cost >= best.cost) or
-            (not self.maximise_cost and sample.cost <= best.cost))
+                (self.maximise_cost and sample.cost >= best.cost) or
+                (not self.maximise_cost and sample.cost <= best.cost))
 
     def report(self):
+        '''
+        print a short message about the progress of the optimisation and the
+        best configuration so far
+        '''
         total_jobs = self.total_jobs()
         percent_progress = self.num_finished_jobs/float(total_jobs)*100.0
         print('{} of {} samples ({:.1f}%) taken in {}.'.format(
@@ -796,7 +838,8 @@ class Optimiser(object):
             data.append((val, list(samples)))
         return data
 
-    def plot_param(self, param_name, plot_boxplot=True, plot_samples=True, plot_means=True, log_axes=(False,False), widths=None):
+    def plot_param(self, param_name, plot_boxplot=True, plot_samples=True,
+                   plot_means=True, log_axes=(False, False)):
         '''
         plot a boxplot of parameter values against cost
         plot_boxplot: whether to plot boxplots
@@ -834,9 +877,12 @@ class Optimiser(object):
         plt.autoscale(True)
         plt.show()
 
-    def scatter_plot(self, param_a, param_b, interactive=True, color_by='cost', log_axes=(False,False,False)):
+    #TODO: instead of 'interactive' pass an argument of how many points to show, then deal with the slider business outside of optimisation.py and plot3D.py
+    def scatter_plot(self, param_a, param_b, interactive=True, color_by='cost',
+                     log_axes=(False, False, False)):
         '''
-            interactive: whether to display a slider for changing the number of samples to display
+            interactive: whether to display a slider for changing the number of
+                samples to display
             color_by: either 'cost' or 'age'
             log_axes: whether to display the x,y,z axes with a logarithmic scale
         '''
@@ -854,9 +900,10 @@ class Optimiser(object):
         axes_names = ['param: ' + param_a, 'param: ' + param_b, 'cost']
 
         plot3D.scatter3D(xs, ys, costs, interactive=interactive, color_by=color,
-                        markersize=4, tooltips=texts, axes_names=axes_names, log_axes=log_axes)
+                         markersize=4, tooltips=texts, axes_names=axes_names,
+                         log_axes=log_axes)
 
-    def surface_plot(self, param_a, param_b, log_axes=(False,False,False)):
+    def surface_plot(self, param_a, param_b, log_axes=(False, False, False)):
         '''
         plot the surface of different values of param_a and param_b and how they
         affect the cost (z-axis). If there are multiple configurations with the
@@ -882,8 +929,8 @@ class Optimiser(object):
             costs[val] = sample.cost
             texts[val] = 'config: {}, cost: {}'.format(config_string(sample.config), sample.cost)
         xs, ys = np.meshgrid(xs, ys)
-        costs = np.vectorize(lambda x,y: costs[(x,y)])(xs, ys)
-        texts = np.vectorize(lambda x,y: texts[(x,y)])(xs, ys)
+        costs = np.vectorize(lambda x, y: costs[(x, y)])(xs, ys)
+        texts = np.vectorize(lambda x, y: texts[(x, y)])(xs, ys)
         axes_names = ['param: ' + param_a, 'param: ' + param_b, 'cost']
         plot3D.surface3D(xs, ys, costs, tooltips=texts, axes_names=axes_names, log_axes=log_axes)
 
@@ -947,7 +994,8 @@ class Optimiser(object):
         load progress from a dictionary
         (designed to be overridden by derived classes in order to load specialised data)
         '''
-        self.samples = [Sample(dotdict(config), cost, extra) for config, cost, extra in save['samples']]
+        self.samples = [Sample(dotdict(config), cost, extra)
+                        for config, cost, extra in save['samples']]
         self.num_started_jobs = save['num_started_jobs']
         self.num_finished_jobs = save['num_finished_jobs']
         self.finished_job_ids = set(save['finished_job_ids'])
@@ -1078,37 +1126,44 @@ class RandomSearchOptimiser(Optimiser):
 
 
 
+class RangeType:
+    ''' The possible types of parameter ranges (see range_type() for details) '''
+    Arbitrary   = 'arbitrary'
+    Constant    = 'constant'
+    Linear      = 'linear'
+    Logarithmic = 'logarithmic'
+
 def range_type(range_):
-    ''' determine whether the range is 'linear', 'logarithmic', 'arbitrary' or 'constant'
+    ''' determine whether the range is arbitrary, constant, linear or logarithmic
     range_: must be numpy array
 
-    note: range_ must be sorted either ascending or descending to be detected as
+    Note: range_ must be sorted either ascending or descending to be detected as
         linear or logarithmic
 
-    range types:
-        - linear: >2 elements, constant difference
-        - logarithmic: >2 elements, constant difference between log(elements)
-        - arbitrary: >1 element, not linear or logarithmic (perhaps not numeric)
-        - constant: 1 element (perhaps not numeric)
+    Range types:
+        - Arbitrary: >1 element, not linear or logarithmic (perhaps not numeric)
+        - Constant: 1 element (perhaps not numeric)
+        - Linear: >2 elements, constant difference
+        - Logarithmic: >2 elements, constant difference between log(elements)
     '''
     if len(range_) == 1:
-        return 'constant'
+        return RangeType.Constant
     # 'i' => integer, 'u' => unsigned integer, 'f' => floating point
     elif len(range_) < 2 or range_.dtype.kind not in 'iuf':
-        return 'arbitrary'
+        return RangeType.Arbitrary
     else:
         tmp = range_[1:] - range_[:-1] # differences between element i and element i+1
         is_lin = np.all(np.isclose(tmp[0], tmp)) # same difference between each element
         if is_lin:
-            return 'linear'
+            return RangeType.Linear
         else:
             tmp = np.log(range_)
             tmp = tmp[1:] - tmp[:-1]
             is_log = np.all(np.isclose(tmp[0], tmp))
             if is_log:
-                return 'logarithmic'
+                return RangeType.Logarithmic
             else:
-                return 'arbitrary'
+                return RangeType.Arbitrary
 
 def log_uniform(low, high):
     ''' sample a random number in the interval [low, high] distributed logarithmically within that space '''
@@ -1132,8 +1187,38 @@ def close_to_any(x, xs, tol=1e-5):
 
 
 class BayesianOptimisationOptimiser(Optimiser):
+    '''
+    Bayesian Optimisation Strategy:
+    1. Sample some random initial points
+    2. Using a surrogate function to stand in for the cost function (which is
+       unknown) define an acquisition function which estimates how good sampling at
+       each point would be. Then maximise this value to obtain the next point to
+       sample.
+    3. With each obtained sample, the accuracy of the surrogate function with
+       respect to the true cost function increases, which in turn allows better
+       choices of next samples to test.
+
+    Technicalities:
+    - If the next suggested sample is too close to an existing sample, then this
+      would not give much new information, so instead the next point is chosen
+      randomly. This results in a better picture of the cost function which in
+      turn may make new points look more desirable, allowing the algorithm to
+      progress and not get stuck in local optima
+    - Bayesian optimisation is inherently a serial process. To parallelise the
+      algorithm, the results for ongoing jobs are estimated by trusting the
+      expected value of the surrogate function. After the job has finished the
+      correct value is used, but in the meantime it allows more jobs to be
+      started based on the estimated results.
+    - Logarithmically spaced parameters (where the order of magnitude is more
+      important than the absolute value) must be sampled log-uniformly rather than
+      uniformly.
+    - Discrete parameters are not compatible with Bayesian optimisation since
+      the chosen surrogate function is a Gaussian Process, which fits real-valued
+      data, and the acquisition function also relies on real-number calculations.
+      Modifications to the algorithm may allow for discrete valued parameters however.
+    '''
     def __init__(self, ranges, maximise_cost=False,
-                 acquisition_function='EI', acquisition_function_params=dict(),
+                 acquisition_function='EI', acquisition_function_params=None,
                  gp_params=None, pre_samples=4, ac_num_restarts=10,
                  close_tolerance=1e-5, allow_parallel=True):
         '''
@@ -1162,10 +1247,11 @@ class BayesianOptimisationOptimiser(Optimiser):
             in order to start another job in parallel. (useful when running a
             server with multiple client evaluators).
         '''
-        ranges = {param:np.array(range_) for param,range_ in ranges.items()} # numpy arrays are required
+        ranges = {param:np.array(range_) for param, range_ in ranges.items()} # numpy arrays are required
         super(self.__class__, self).__init__(ranges, maximise_cost)
 
-        self.acquisition_function_params = acquisition_function_params
+        self.acquisition_function_params = ({} if acquisition_function_params is None
+                                            else acquisition_function_params)
         ac_param_keys = set(self.acquisition_function_params.keys())
         if acquisition_function == 'EI':
             self.acquisition_function_name = 'EI'
@@ -1179,9 +1265,11 @@ class BayesianOptimisationOptimiser(Optimiser):
             # <= is subset. Not all params must be provided, but those given must be valid
             assert ac_param_keys <= set(['kappa']), 'invalid acquisition function parameters'
 
-        else:
+        elif callable(acquisition_function):
             self.acquisition_function_name = 'custom acquisition function'
             self.acquisition_function = acquisition_function
+        else:
+            raise ValueError('invalid acquisition_function')
 
         if gp_params is None:
             self.gp_params = dict(
@@ -1201,10 +1289,12 @@ class BayesianOptimisationOptimiser(Optimiser):
         self.close_tolerance = close_tolerance
 
         self.params = sorted(self.ranges.keys())
-        self.range_types = {param : range_type(range_) for param,range_ in self.ranges.items()}
+        self.range_types = {param : range_type(range_) for param, range_ in self.ranges.items()}
 
-        if 'arbitrary' in self.range_types.values():
-            raise ValueError('arbitrary ranges are not allowed with Bayesian optimisation'.format(param))
+        if RangeType.Arbitrary in self.range_types.values():
+            bad_ranges = [param for param, type_ in self.range_types.items()
+                          if type_ == RangeType.Arbitrary]
+            raise ValueError('arbitrary ranges {} are not allowed with Bayesian optimisation'.format(bad_ranges))
 
         # record the bounds only for the linear and logarithmic ranges
         self.range_bounds = {param: (min(self.ranges[param]), max(self.ranges[param])) for param in self.params}
@@ -1221,9 +1311,9 @@ class BayesianOptimisationOptimiser(Optimiser):
         for param in self.params: # self.params is ordered
             type_ = self.range_types[param]
             low, high = self.range_bounds[param]
-            if type_ == 'linear':
+            if type_ == RangeType.Linear:
                 self.point_bounds.append((low, high))
-            elif type_ == 'logarithmic':
+            elif type_ == RangeType.Logarithmic:
                 self.point_bounds.append((np.log(low), np.log(high)))
 
 
@@ -1267,8 +1357,8 @@ class BayesianOptimisationOptimiser(Optimiser):
             in_pre_phase = self.num_started_jobs < self.pre_samples
             # all jobs from the pre-phase are finished, need the first Bayesian
             # optimisation sample
-            pre_phase_finished = (self.wait_for_job == None and
-                                self.num_finished_jobs >= self.pre_samples)
+            pre_phase_finished = (self.wait_for_job is None and
+                                  self.num_finished_jobs >= self.pre_samples)
             # finished waiting for the last Bayesian optimisation job to finish
             bayes_job_finished = self.wait_for_job in self.finished_job_ids
 
@@ -1306,7 +1396,8 @@ class BayesianOptimisationOptimiser(Optimiser):
         # reshape(1,-1) => 1 sample (row) with N attributes (cols). Needed because x is passed as shape (N,)
         # unpacking the params dict is harmless if the dict is empty
         neg_acquisition_function = lambda x: -self.acquisition_function(
-            x.reshape(1,-1), gp_model, self.maximise_cost, best_cost, **self.acquisition_function_params)
+            x.reshape(1, -1), gp_model, self.maximise_cost, best_cost,
+            **self.acquisition_function_params)
 
         # minimise the negative acquisition function
         best_next_x = None
@@ -1325,7 +1416,8 @@ class BayesianOptimisationOptimiser(Optimiser):
                 options=dict(maxiter=15000) # maxiter=15000 is default
             )
             if not result.success:
-                self._log('negative acquisition minimisation failed, restarting')
+                self._log('restart {}/{} of negative acquisition minimisation failed'.format(
+                    j, self.ac_num_restarts))
                 continue
 
             # result.fun == negative acquisition function evaluated at result.x
@@ -1342,7 +1434,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         else:
             # reshape to make shape=(1,num_attribs) and negate best_neg_ac to make
             # it the positive acquisition function value
-            return best_next_x.reshape(1,-1), -best_neg_ac
+            return best_next_x.reshape(1, -1), -best_neg_ac
 
     def _bayes_step(self, job_num):
         '''
@@ -1367,13 +1459,13 @@ class BayesianOptimisationOptimiser(Optimiser):
                                 for job_num, s in self.hypothesised_samples])
                 hy = np.array([[s.cost] for job_num, s in self.hypothesised_samples])
             else:
-                hx = np.empty(shape=(0,sx.shape[1]))
-                hy = np.empty(shape=(0,1))
+                hx = np.empty(shape=(0, sx.shape[1]))
+                hy = np.empty(shape=(0, 1))
         else:
             self.wait_for_job = job_num # do not add a new job until this job has been processed
 
-            hx = np.empty(shape=(0,sx.shape[1]))
-            hy = np.empty(shape=(0,1))
+            hx = np.empty(shape=(0, sx.shape[1]))
+            hy = np.empty(shape=(0, 1))
 
         # combination of the true samples (sx, sy) and the hypothesised samples
         # (hx, hy) if there are any
@@ -1552,14 +1644,18 @@ class BayesianOptimisationOptimiser(Optimiser):
         config = {}
         for param in self.params:
             type_ = self.range_types[param]
-            if type_ == 'linear':
+
+            if type_ == RangeType.Linear:
                 low, high = self.range_bounds[param]
                 config[param] = np.random.uniform(low, high)
-            elif type_ == 'logarithmic':
+
+            elif type_ == RangeType.Logarithmic:
                 low, high = self.range_bounds[param]
                 config[param] = log_uniform(low, high)
-            elif type_ == 'constant':
+
+            elif type_ == RangeType.Constant:
                 config[param] = self.ranges[param][0] # only 1 choice
+
             else:
                 raise ValueError('invalid range type: {}'.format(type_))
 
@@ -1581,9 +1677,9 @@ class BayesianOptimisationOptimiser(Optimiser):
         elements = []
         for param in self.params: # self.params is sorted
             type_ = self.range_types[param]
-            if type_ == 'linear':
+            if type_ == RangeType.Linear:
                 elements.append(config[param])
-            elif type_ == 'logarithmic':
+            elif type_ == RangeType.Logarithmic:
                 elements.append(np.log(config[param]))
         return np.array([elements])
 
@@ -1605,20 +1701,21 @@ class BayesianOptimisationOptimiser(Optimiser):
         for param in self.params: # self.params is sorted
             type_ = self.range_types[param]
 
-            if type_ == 'constant':
+            if type_ == RangeType.Constant:
                 config[param] = self.ranges[param][0] # only 1 choice
             else:
                 if pi >= point.shape[1]:
                     raise ValueError('point has too few attributes')
-                val = point[0,pi]
+                val = point[0, pi]
                 pi += 1
 
-                if type_ == 'linear':
+                if type_ == RangeType.Linear:
                     config[param] = val
-                elif type_ == 'logarithmic':
+                elif type_ == RangeType.Logarithmic:
                     config[param] = np.exp(val)
 
-        if pi != point.shape[1]: raise ValueError('point has too many attributes')
+        if pi != point.shape[1]:
+            raise ValueError('point has too many attributes')
 
         return dotdict(config)
 
@@ -1658,8 +1755,8 @@ class BayesianOptimisationOptimiser(Optimiser):
         assert step in self.step_log.keys(), 'step not recorded in the log'
 
         type_ = self.range_types[param]
-        assert type_ in ['linear', 'logarithmic']
-        is_log = type_ == 'logarithmic' # whether the range of the chosen parameter is logarithmic
+        assert type_ in [RangeType.Linear, RangeType.Logarithmic]
+        is_log = type_ == RangeType.Logarithmic # whether the range of the chosen parameter is logarithmic
 
         s = dotdict(self.step_log[step])
         all_xs = self.ranges[param]
@@ -1692,11 +1789,11 @@ class BayesianOptimisationOptimiser(Optimiser):
             ax1.plot(all_xs, true_cost, 'k--', label='true cost')
 
         # get the value for the parameter 'param' from the given point
-        param_from_point = lambda p: self.point_to_config(p.reshape(1,-1))[param]
+        param_from_point = lambda p: self.point_to_config(p.reshape(1, -1))[param]
         # plot samples projected onto the `param` axis
         # reshape needed because using x in sx reduces each row to a 1D array
         sample_xs = [param_from_point(x) for x in s.sx]
-        ax1.plot(sample_xs, s.sy, 'bo', label='samples') #TODO: plot best specially
+        ax1.plot(sample_xs, s.sy, 'bo', label='samples')
 
         if len(s.hx) > 0:
             # there are some hypothesised samples
@@ -1704,13 +1801,17 @@ class BayesianOptimisationOptimiser(Optimiser):
             ax1.plot(hypothesised_xs, s.hy, 'o', color='tomato', label='hypothesised samples')
 
         # index of the best current real sample
-        best_i  = np.argmax(s.sy) if self.maximise_cost else np.argmin(s.sy)
-        ax1.plot(s.sx[best_i], s.sy[best_i], '*', markersize=15, color='deepskyblue', zorder=10, label='best sample')
+        best_i = np.argmax(s.sy) if self.maximise_cost else np.argmin(s.sy)
+        ax1.plot(s.sx[best_i], s.sy[best_i], '*', markersize=15,
+                 color='deepskyblue', zorder=10, label='best sample')
 
 
-        # take the next_x configuration and perturb the parameter `param` while leaving the others intact
-        # this essentially produces a line through the parameter space to predict uncertainty along
         def perturb(x):
+            '''
+            take the next_x configuration and perturb the parameter `param`
+            while leaving the others intact this essentially produces a line
+            through the parameter space to predict uncertainty along.
+            '''
             c = s.next_x.copy()
             c[param] = x
             return self.config_to_point(c)
@@ -1735,7 +1836,9 @@ class BayesianOptimisationOptimiser(Optimiser):
         ax2.set_ylabel(self.acquisition_function_name)
         ax2.set_title('acquisition function')
 
-        ac = self.acquisition_function(points, gp_model, self.maximise_cost, s.best_sample.cost, **self.acquisition_function_params)
+        ac = self.acquisition_function(points, gp_model, self.maximise_cost,
+                                       s.best_sample.cost,
+                                       **self.acquisition_function_params)
         if log_ac:
             # only useful for EI where ac >= 0 always
             ac[ac == 0.0] = 1e-10
@@ -1759,7 +1862,9 @@ class BayesianOptimisationOptimiser(Optimiser):
         # of the acquisition function suggested as the next configuration to
         # test. So plot both.
         if s.chosen_at_random and s.argmax_acquisition is not None:
-            ax2.axvline(x=self.point_to_config(s.argmax_acquisition)[param], color='y', label='$\\mathrm{{argmax}}\; {}$'.format(self.acquisition_function_name))
+            ac_x = self.point_to_config(s.argmax_acquisition)[param]
+            label='$\\mathrm{{argmax}}\\; {}$'.format(self.acquisition_function_name)
+            ax2.axvline(x=ac_x, color='y', label=label)
 
         ax2.legend()
 

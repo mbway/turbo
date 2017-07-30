@@ -1,3 +1,13 @@
+to get ground truth with GP:
+- make several green lines (functions to fit) with several different data sets
+  with chunks removed
+- fit the GP to the given data points, choose hyperparameters by how the GP
+  fits the underlying generator function
+    - make sure that the generator function fits within the uncertainty bounds.
+      Want the uncertainty to grow massively outside the range of data
+
+discrete parameters with Bayesian optimisation
+- treat the parameters differently, use a GP to fit the continuous ones and use some other method and acquisition function with the discrete data
 
 Parallelise Bayes:
 self.ongoing_jobs = [dict(job_num, config, predicted_cost)]
