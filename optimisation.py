@@ -775,10 +775,10 @@ class Optimiser(object):
         '''
         raise NotImplementedError
 
-    #TODO: change this. maybe set grid search max_jobs and use that instead
-    def total_jobs(self):
+    def configuration_space_size(self):
         '''
-        return the total number of configurations to be tested
+        return the total number of configurations in the configuration space:
+            can be finite or infinite, depending on the type of optimiser.
         '''
         total = 1
         for param_range in self.ranges.values():
@@ -808,10 +808,10 @@ class Optimiser(object):
         print a short message about the progress of the optimisation and the
         best configuration so far
         '''
-        total_jobs = self.total_jobs()
-        percent_progress = self.num_finished_jobs/float(total_jobs)*100.0
-        print('{} of {} samples ({:.1f}%) taken in {}.'.format(
-            self.num_finished_jobs, total_jobs, percent_progress, time_string(self.duration)))
+        size = self.configuration_space_size()
+        percent_progress = self.num_finished_jobs/float(size)*100.0
+        print('{} of {} possible configurations tested ({:.1f}%) taken in {}.'.format(
+            self.num_finished_jobs, size, percent_progress, time_string(self.duration)))
         best = self.best_sample()
         if best is None:
             print('no best configuration known')
@@ -1092,11 +1092,11 @@ class RandomSearchOptimiser(Optimiser):
         self.max_retries = max_retries
         self.params = sorted(self.ranges.keys())
 
-    def total_jobs(self):
+    def configuration_space_size(self):
         if self.allow_re_tests:
             return inf
         else:
-            return super(self.__class__, self).total_jobs()
+            return super(self.__class__, self).configuration_space_size()
 
     def _random_config(self):
         return {param : np.random.choice(param_range) for param, param_range in self.ranges.items()}
@@ -1349,7 +1349,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         self.step_log = {}
         self.step_log_keep = 100 # max number of steps to keep
 
-    def total_jobs(self):
+    def configuration_space_size(self):
         return inf
 
     def _ready_for_next_configuration(self):
