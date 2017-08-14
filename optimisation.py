@@ -21,6 +21,11 @@ import json
 import struct
 import os
 
+# for serialising Gaussian Process models for saving to disk
+import pickle
+import base64
+import zlib
+
 import socket
 import threading
 # dummy => uses Threads rather than processes
@@ -1275,7 +1280,7 @@ class BayesianOptimisationOptimiser(Optimiser):
             self.gp_params = dict(
                 alpha = 1e-5, # larger => more noise. Default = 1e-10
                 # the default kernel
-                kernel = gp.kernels.RBF(length_scale=1.0, length_scale_bounds="fixed"),
+                kernel = 1.0 * gp.kernels.RBF(length_scale=1.0, length_scale_bounds="fixed"),
                 n_restarts_optimizer = 10,
                 # make the mean 0 (theoretically a bad thing, see docs, but can help)
                 normalize_y = True,
@@ -1328,6 +1333,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         # a log of the Bayesian optimisation steps
         # dict of job number to dict with values:
         #
+        # gp: trained Gaussian process
         # sx, sy: numpy arrays corresponding to points of samples taken thus far
         # hx, hy: numpy arrays corresponding to _hypothesised_ points of ongoing
         #   jobs while the step was being calculated
@@ -1477,7 +1483,14 @@ class BayesianOptimisationOptimiser(Optimiser):
         # because the model is definitely 'clean' each time. In my tests,
         # there was no perceptible difference in timing.
         gp_model = gp.GaussianProcessRegressor(**self.gp_params)
+        # NOTE: fitting only optimises _certain_ kernel parameters with given
+        # bounds, see gp_model.kernel_.theta for the optimised kernel
+        # parameters.
+        # NOTE: RBF(...) has NO parameters to optimise, however 1.0 * RBF(...) does!
         gp_model.fit(xs, ys)
+
+        # gp_model.kernel_ is a copy of gp_model.kernel with the parameters optimised
+        #self._log('GP params={}'.format(gp_model.kernel_.theta))
 
         # best known configuration and the corresponding cost of that configuration
         best_sample = self.best_sample()
@@ -1496,7 +1509,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         # acquisition function successfully maximised, but the resulting configuration would break the GP.
         # having two samples too close together will 'break' the GP
         elif close_to_any(next_x, xs, self.close_tolerance):
-            self._log('choosing random sample to avoid samples being too close')
+            self._log('argmax(acquisition function) too close to an existing sample: choosing randomly instead')
             next_x = self._unique_random_config(different_from=xs, num_attempts=1000)
             next_ac = 0
             chosen_at_random = True
@@ -1511,7 +1524,9 @@ class BayesianOptimisationOptimiser(Optimiser):
             est_cost = np.asscalar(est_cost) # ndarray of shape=(1,1) is returned from predict()
             self.hypothesised_samples.append((job_num, Sample(next_x, est_cost)))
 
+
         self.step_log[job_num] = dict(
+            gp = gp_model,
             sx=sx, sy=sy,
             hx=hx, hy=hy,
             best_sample=best_sample,
@@ -1723,12 +1738,28 @@ class BayesianOptimisationOptimiser(Optimiser):
 
     def _save_dict(self):
         save = super(self.__class__, self)._save_dict()
-        save['step_log'] = self.step_log
+
+        # save GP models compressed and together since they contain a lot of
+        # redundant information and are not human readable anyway.
+        # for a test run with ~40 optimisation steps, naive storage (as part of
+        # step log): 1MB, separate with compression: 200KB
+        step_log = {}
+        gps = {}
+        for n, s in self.step_log.items():
+            step_log[n] = {k:v for k, v in s.items() if k != 'gp'}
+            gps[n] = s['gp']
+
+        save['step_log'] = step_log
+        save['gps'] = base64.b64encode(zlib.compress(pickle.dumps(gps))).decode('utf-8')
         return save
 
     def _load_dict(self, save):
         super(self.__class__, self)._load_dict(save)
         self.step_log = save['step_log']
+
+        gps = pickle.loads(zlib.decompress(base64.b64decode(s['gp'])))
+        for n, s in self.step_log.items():
+            s['gp'] = gps[n]
 
 
 
@@ -1766,8 +1797,11 @@ class BayesianOptimisationOptimiser(Optimiser):
         xs = np.vstack([s.sx, s.hx])
         ys = np.vstack([s.sy, s.hy])
 
-        gp_model = gp.GaussianProcessRegressor(**self.gp_params)
-        gp_model.fit(xs, ys)
+        gp_model = s.gp
+        # training the GP is nondeterministic if there are any parameters to
+        # tune so may give a different result here to during optimisation
+        #gp_model = gp.GaussianProcessRegressor(**self.gp_params)
+        #gp_model.fit(xs, ys)
 
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 10))
         fig.suptitle('Bayesian Optimisation step {}{}'.format(
