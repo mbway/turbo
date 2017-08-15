@@ -756,6 +756,27 @@ class Optimiser(object):
         self._shutdown_message(old_duration, this_duration,
                                max_jobs_exceeded, out_of_configs, exception_caught)
 
+    def run_multithreaded(self, evaluators, max_jobs=inf):
+        '''
+        run the optimiser server and run each evaluator in a separate thread
+
+        evaluators: a list of Evaluator objects to run
+        max_jobs: the maximum number of jobs to allow for this run (not in total)
+        '''
+        num_clients = len(evaluators)
+        pool = ThreadPool(num_clients)
+        try:
+            for e in evaluators:
+                pool.apply_async(e.run_client)
+            self.run_server(max_clients=num_clients, max_jobs=max_jobs)
+        finally:
+            # the pool is the optimiser's responsibility, so make sure it gets
+            # shut down gracefully
+            for e in evaluators:
+                e.stop_flag.set()
+            pool.close()
+            pool.join()
+
 
     def _ready_for_next_configuration(self):
         '''
