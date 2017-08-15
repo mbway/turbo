@@ -323,7 +323,7 @@ class Evaluator(object):
         self.log_record = ''
         # whether to print to stdout from log()
         self.noisy = False
-        self.stop_flag = threading.Event() # is_set() => finish gracefully and stop
+        self._stop_flag = threading.Event() # is_set() => finish gracefully and stop
 
     def run_client(self, host='0.0.0.0', port=PORT):
         '''
@@ -333,21 +333,21 @@ class Evaluator(object):
         sock = None
         try:
             self.log('evaluator client starting...')
-            self.stop_flag.clear()
+            self._stop_flag.clear()
 
-            while not self.stop_flag.is_set():
+            while not self._stop_flag.is_set():
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # TCP
                 self.log('attempting to connect to {}:{}'.format(host, port))
                 sock.settimeout(1.0) # only while trying to connect
 
                 # connect to the server
-                while not self.stop_flag.is_set():
+                while not self._stop_flag.is_set():
                     try:
                         sock.connect((host, port))
                         break
                     except (socket.timeout, ConnectionRefusedError, ConnectionAbortedError):
                         time.sleep(1.0)
-                if self.stop_flag.is_set():
+                if self._stop_flag.is_set():
                     break
 
                 self.log('connection established')
@@ -381,6 +381,10 @@ class Evaluator(object):
         finally:
             if sock is not None:
                 sock.close()
+
+    def stop():
+        ''' signal to the evaluator client to stop and shutdown gracefully '''
+        self._stop_flag.set()
 
     def log(self, msg, newline=True):
         '''
@@ -464,13 +468,21 @@ class Optimiser(object):
         self.num_finished_jobs = 0 # number of finished jobs
         self.finished_job_ids = set() # job.num is added after it is finished
 
+        self.duration = 0 # total time spent running (persists across runs)
+
         # written to by _log()
         self.log_record = ''
         # whether to print to stdout from _log()
         self.noisy = False
 
-        self.stop_flag = threading.Event() # is_set() => finish gracefully and stop
-        self.duration = 0 # total time spent (persists across runs)
+        # is_set() => finish gracefully and stop
+        self._stop_flag = threading.Event()
+
+        # used with save_when_ready() to signal to a running optimisation to
+        # save a checkpoint and where to save it.
+        self.checkpoint_filename = './checkpoint.json'
+        self._checkpoint_flag = threading.Event()
+
 
 
     def _log(self, msg, newline=True):
@@ -485,7 +497,11 @@ class Optimiser(object):
             msg = str(msg)
         if newline:
             msg += '\n'
-        self.log_record += msg
+
+        #TODO: see if this works
+        # used to make parsing of separate log entries easier
+        sep = u'\u2063' # INVISIBLE SEPARATOR' (U+2063)
+        self.log_record += sep + msg
         if self.noisy:
             print(msg, end='')
 
@@ -563,13 +579,20 @@ class Optimiser(object):
             self._log('optimisation stopped because an exception was thrown.')
         elif max_jobs_exceeded:
             self._log('optimisation stopped because the maximum number of jobs was exceeded')
-        elif self.stop_flag.is_set():
+        elif self._stop_flag.is_set():
             self._log('optimisation manually shut down gracefully')
         elif out_of_configs and outstanding_jobs == 0:
             self._log('optimisation finished (out of configurations).')
         else:
             self._log('stopped for an unknown reason. May be in an inconsistent state. (details: {} / {} / {})'.format(
-                self.stop_flag.is_set(), out_of_configs, outstanding_jobs))
+                self._stop_flag.is_set(), out_of_configs, outstanding_jobs))
+
+    def _handle_checkpoint(self):
+        ''' handle saving a checkpoint during a run if signalled to '''
+        if self._checkpoint_flag.is_set():
+            self._checkpoint_flag.clear()
+            self._log('saving checkpoint to "{}"'.format(self.checkpoint_filename))
+            self.save_now()
 
     def _handle_client(self, conn, lock, exception_caught, job):
         '''
@@ -615,7 +638,7 @@ class Optimiser(object):
         try:
             self._log('starting optimisation server...')
 
-            self.stop_flag.clear()
+            self._stop_flag.clear()
             run_start_time = time.time()
             old_duration = self.duration # duration as-of the start of this run
             num_jobs = 0 # count number of jobs this run
@@ -638,7 +661,7 @@ class Optimiser(object):
             sock.listen(max_clients) # enable listening on the socket. backlog=max_clients
             sock.settimeout(1.0) # timeout for accept, not inherited by the client connections
 
-            while (not self.stop_flag.is_set() and
+            while (not self._stop_flag.is_set() and
                    not exception_in_pool.is_set() and
                    num_jobs < max_jobs):
 
@@ -648,7 +671,8 @@ class Optimiser(object):
                     self._log('waiting for a connection')
 
                 # wait for a client to connect
-                while not self.stop_flag.is_set() and not exception_in_pool.is_set():
+                while not self._stop_flag.is_set() and not exception_in_pool.is_set():
+                    self._handle_checkpoint() # save a checkpoint if signalled to
                     try:
                         # conn is another socket object
                         conn, addr = sock.accept()
@@ -656,7 +680,7 @@ class Optimiser(object):
                     except socket.timeout:
                         conn = None
                         continue
-                if self.stop_flag.is_set():
+                if self._stop_flag.is_set():
                     break
 
                 with lock:
@@ -725,7 +749,7 @@ class Optimiser(object):
         try:
             self._log('starting sequential optimisation...')
 
-            self.stop_flag.clear()
+            self._stop_flag.clear()
             run_start_time = time.time()
             old_duration = self.duration # duration as-of the start of this run
             num_jobs = 0 # count number of jobs this run
@@ -734,7 +758,8 @@ class Optimiser(object):
             out_of_configs = False
             exception_caught = False
 
-            while not self.stop_flag.is_set() and num_jobs < max_jobs:
+            while not self._stop_flag.is_set() and num_jobs < max_jobs:
+                self._handle_checkpoint() # save a checkpoint if signalled to
                 job = self._next_job()
                 if job is None:
                     out_of_configs = True
@@ -773,9 +798,13 @@ class Optimiser(object):
             # the pool is the optimiser's responsibility, so make sure it gets
             # shut down gracefully
             for e in evaluators:
-                e.stop_flag.set()
+                e.stop()
             pool.close()
             pool.join()
+
+    def stop():
+        ''' signal to the optimiser to stop and shutdown gracefully '''
+        self._stop_flag.set()
 
 
     def _ready_for_next_configuration(self):
@@ -960,38 +989,69 @@ class Optimiser(object):
         axes_names = ['param: ' + param_a, 'param: ' + param_b, 'cost']
         plot3D.surface3D(xs, ys, costs, tooltips=texts, axes_names=axes_names, log_axes=log_axes)
 
-# Saving and Loading Progress
+# Saving and Loading Checkpoints
 
-    def save_progress(self, filename):
+    def save_when_ready(self, filename=None):
         '''
-        save the progress of the optimisation to a JSON file which can be
-        re-loaded and continued. The optimiser must not be running for the state
-        to be saved.
+        while running, save the progress of the optimiser to a checkpoint at the
+        next available opportunity to ensure that the optimiser is quiescent and
+        in a consistent state.
 
-        Note: this does not save all the state of the optimiser, only the samples
+        filename: filename to set self.checkpoint_filename to use for the next
+                  save and from now on. None to leave unchanged.
+
+        note: will not save until the optimiser starts if the optimiser is not
+              currently running
         '''
-        #TODO make sure stopped in a good state before saving
+        if filename is not None:
+            self.checkpoint_filename = filename
+        self._checkpoint_flag.set()
+
+    def save_now(self, filename=None):
+        '''
+        save the progress of the optimiser to a JSON file which can be
+        re-loaded and continued.
+
+        This method assumes that the optimiser is quiescent for the duration of
+        the save and in a consistent state!
+
+        filename: the location to save the checkpoint to, or None to use
+                  self.checkpoint_filename. This filename will be appended with
+                  a counter (ascending number) if a file already exists.
+
+        Note: this does not save all the state of the optimiser. Only an
+              optimiser initialised identically to this one should load the
+              checkpoint.
+        '''
+        filename = filename if filename is not None else self.checkpoint_filename
 
         # keep counting until a filename is available
         if os.path.isfile(filename):
-            print('File "{}" already exists!'.format(filename))
+            self._log('While saving a checkpoint: File "{}" already exists!'.format(filename))
             name, ext = os.path.splitext(filename)
             count = 1
             while os.path.isfile(name + str(count) + ext):
                 count += 1
             filename = name + str(count) + ext
-            print('writing to "{}" instead'.format(filename))
+            self._log('writing to "{}" instead'.format(filename))
 
         with open(filename, 'w') as f:
-            f.write(json.dumps(self._save_dict(), indent=4, cls=NumpyJSONEncoder))
+            f.write(json.dumps(self._save_dict(), indent=2, cls=NumpyJSONEncoder))
 
-    def load_progress(self, filename):
+    def load_checkpoint(self, filename=None):
         '''
-        restore the progress of an optimisation run (note: the optimiser must be
-        initialised identically to when the samples were saved). The optimiser
-        must not be running for the state to be loaded.
+        restore the progress of an optimisation run from a saved checkpoint.
+        (note: the optimiser must be initialised identically to when the
+        checkpoint was saved).
+
+        This method assumes that the optimiser is quiescent for the duration of
+        the load
+
+        filename: the location to load the checkpoint from, or None to use
+                  self.checkpoint_filename
         '''
-        #TODO make sure stopped in a good state before saving
+        filename = filename if filename is not None else self.checkpoint_filename
+
         with open(filename, 'r') as f:
             self._load_dict(json.loads(f.read()))
 
@@ -1167,10 +1227,12 @@ def range_type(range_):
         linear or logarithmic
 
     Range types:
-        - Arbitrary: >1 element, not linear or logarithmic (perhaps not numeric)
+        - Arbitrary: 0 or >1 element, not linear or logarithmic (perhaps not numeric)
+                     Note: arrays of identical or nearly identical elements are
+                     Arbitrary, not Constant
         - Constant: 1 element (perhaps not numeric)
-        - Linear: >2 elements, constant difference
-        - Logarithmic: >2 elements, constant difference between log(elements)
+        - Linear: >2 elements, constant non-zero difference between adjacent elements
+        - Logarithmic: >2 elements, constant non-zero difference between adjacent log(elements)
     '''
     if len(range_) == 1:
         return RangeType.Constant
@@ -1178,8 +1240,16 @@ def range_type(range_):
     elif len(range_) < 2 or range_.dtype.kind not in 'iuf':
         return RangeType.Arbitrary
     else:
+        # guaranteed: >2 elements, numeric
+
+        # if every element is identical then it is Arbitrary. Not Constant
+        # because constant ranges must have a single element.
+        if np.all(np.isclose(range_[0], range_)):
+            return RangeType.Arbitrary
+
         tmp = range_[1:] - range_[:-1] # differences between element i and element i+1
-        is_lin = np.all(np.isclose(tmp[0], tmp)) # same difference between each element
+        # same non-zero difference between each element
+        is_lin = np.all(np.isclose(tmp[0], tmp))
         if is_lin:
             return RangeType.Linear
         else:
@@ -1944,7 +2014,7 @@ def interactive(loggable, run_task, log_filename=None, poll_interval=0.5):
     >>> task = lambda: optimiser.run_server(host, port, max_jobs=20)
     >>> op.interactive(optimiser, task, '/tmp/optimiser.log')
 
-    loggable: an object with a log_record and stop_flag attributes
+    loggable: an object with a log_record attribute and stop() method
     run_task: a function to run (related to the loggable object),
         eg lambda: optimiser.run_sequential(my_evaluator)
     log_filename: filename to write the log to (recommend somewhere in /tmp/) or
@@ -1975,7 +2045,7 @@ def interactive(loggable, run_task, log_filename=None, poll_interval=0.5):
                 time.sleep(poll_interval)
         except KeyboardInterrupt:
             print('-- KeyboardInterrupt caught, stopping gracefully --')
-            loggable.stop_flag.set()
+            loggable.stop()
             thread.join()
 
         # finish off anything left not printed

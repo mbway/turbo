@@ -70,6 +70,11 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(op.range_type(np.logspace(10, 1, num=12)), 'logarithmic') # can be in descending order
         self.assertEqual(op.range_type(np.logspace(1, 10, num=12, base=14)), 'logarithmic') # can be any base
 
+        self.assertEqual(op.range_type(np.array([1, 1])), 'arbitrary')
+        self.assertEqual(op.range_type(np.array([0, 0])), 'arbitrary')
+        self.assertEqual(op.range_type(np.array([1, 1, 1, 1])), 'arbitrary')
+        self.assertEqual(op.range_type(np.array([0, 0, 0, 0])), 'arbitrary')
+        self.assertEqual(op.range_type(np.array([5, 5, 5, 5])), 'arbitrary')
         self.assertEqual(op.range_type(np.array([12, 1, 10])), 'arbitrary')
         self.assertEqual(op.range_type(np.array([])), 'arbitrary')
         self.assertEqual(op.range_type(np.array(["hi", "there"])), 'arbitrary')
