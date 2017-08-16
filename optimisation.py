@@ -47,7 +47,13 @@ from scipy.stats import norm # Gaussian/normal distribution
 import plot3D
 
 
-PORT = 9187
+# constants gathered here so that the defaults can be changed easily (eg for testing)
+DEFAULT_HOST = '0.0.0.0'
+DEFAULT_PORT = 9187
+CLIENT_POLL = 1.0 # seconds for the client to wait for a connection before retrying
+SERVER_POLL = 1.0 # seconds for the server to wait for a connection before retrying
+CONFIG_POLL = 0.1 # seconds to wait for the optimiser to be ready for another configuration before retrying
+CHECKPOINT_POLL = 1.0 # seconds to wait for outstanding jobs to finish
 
 
 
@@ -302,7 +308,10 @@ def recv_json(conn):
 # a length of 0 to indicate 'no data' the evaluator can then resume trying to
 # connect in-case the server comes back. Alternatively, when the server shuts
 # down, the connection breaks (but not always). Both are used to detect a
-# disconnection.
+# disconnection. The server does not keep a record of individual clients and so
+# does not notify each client that the server has shut down (only the currently
+# connected ones) because it cannot know when it has notified every client.
+# After the server shuts down the clients return to attempting connections.
 #
 # When connecting to the server, there are several different ways the call to
 # connect could fail. In any of these situations: simply wait a while and try
@@ -325,20 +334,27 @@ class Evaluator(object):
         self.noisy = False
         self._stop_flag = threading.Event() # is_set() => finish gracefully and stop
 
-    def run_client(self, host='0.0.0.0', port=PORT):
+    def run_client(self, host=DEFAULT_HOST, port=DEFAULT_PORT, max_jobs=inf,
+                   poll_interval=CLIENT_POLL):
         '''
         receive jobs from an Optimiser server and evaluate them until the server
         shuts down.
+
+        host: the hostname/IP where the optimiser server is running
+        port: the port number that the optimiser server is listening on
+        max_jobs: the maximum number of jobs to allow for this run (not in total)
+        poll_interval: seconds for the client to wait for a connection before retrying
         '''
         sock = None
         try:
             self.log('evaluator client starting...')
             self._stop_flag.clear()
+            num_jobs = 0
 
-            while not self._stop_flag.is_set():
+            while not self._stop_flag.is_set() and num_jobs < max_jobs:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # TCP
                 self.log('attempting to connect to {}:{}'.format(host, port))
-                sock.settimeout(1.0) # only while trying to connect
+                sock.settimeout(poll_interval) # only while trying to connect
 
                 # connect to the server
                 while not self._stop_flag.is_set():
@@ -346,7 +362,7 @@ class Evaluator(object):
                         sock.connect((host, port))
                         break
                     except (socket.timeout, ConnectionRefusedError, ConnectionAbortedError):
-                        time.sleep(1.0)
+                        continue
                 if self._stop_flag.is_set():
                     break
 
@@ -378,11 +394,21 @@ class Evaluator(object):
                 self.log('returning results: {}'.format(results))
                 send_json(sock, {'samples' : samples}, encoder=NumpyJSONEncoder)
                 sock.close()
+
+                num_jobs += 1
+
+            if self._stop_flag.is_set():
+                self.log('stopping because of manual shut down')
+            elif num_jobs >= max_jobs:
+                self.log('stopping because max_jobs reached')
+        except Exception:
+            self.log('Exception raised during client run:\n{}'.format(exception_string()))
         finally:
+            self.log('evaluator shutting down')
             if sock is not None:
                 sock.close()
 
-    def stop():
+    def stop(self):
         ''' signal to the evaluator client to stop and shutdown gracefully '''
         self._stop_flag.set()
 
@@ -515,7 +541,7 @@ class Optimiser(object):
         if not self._ready_for_next_configuration():
             self._log('not ready for the next configuration yet')
             while not self._ready_for_next_configuration():
-                time.sleep(0.1)
+                time.sleep(CONFIG_POLL)
             self._log('now ready for next configuration')
 
     def _next_job(self):
@@ -591,6 +617,12 @@ class Optimiser(object):
         ''' handle saving a checkpoint during a run if signalled to '''
         if self._checkpoint_flag.is_set():
             self._checkpoint_flag.clear()
+
+            if self.num_started_jobs > self.num_finished_jobs:
+                self._log('waiting for {} outstanding jobs to finish before taking a snapshot')
+                while self.num_started_jobs > self.num_finished_jobs:
+                    time.sleep(CHECKPOINT_POLL)
+
             self._log('saving checkpoint to "{}"'.format(self.checkpoint_filename))
             self.save_now()
 
@@ -622,15 +654,18 @@ class Optimiser(object):
         finally:
             conn.close()
 
-    def run_server(self, host='0.0.0.0', port=PORT, max_clients=4, max_jobs=inf):
+    def run_server(self, host=DEFAULT_HOST, port=DEFAULT_PORT, max_clients=4,
+                   max_jobs=inf, poll_interval=SERVER_POLL):
         '''
         run a server which serves jobs to any listening evaluators
 
+        host: the hostname/IP for the optimiser to listen on
+        port: the port number for the optimiser to listen on
         max_clients: the maximum number of clients to expect to connect. If
             another connects then their job will not be served until there is a
             free thread to deal with it.
-        evaluator: the Evaluator object to use to evaluate the configurations
         max_jobs: the maximum number of jobs to allow for this run (not in total)
+        poll_interval: seconds for the server to wait for a connection before retrying
         '''
         pool = None
         sock = None
@@ -659,7 +694,7 @@ class Optimiser(object):
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) # able to re-use host/port combo even if in use
             sock.bind((host, port))
             sock.listen(max_clients) # enable listening on the socket. backlog=max_clients
-            sock.settimeout(1.0) # timeout for accept, not inherited by the client connections
+            sock.settimeout(poll_interval) # timeout for accept, not inherited by the client connections
 
             while (not self._stop_flag.is_set() and
                    not exception_in_pool.is_set() and
@@ -802,7 +837,7 @@ class Optimiser(object):
             pool.close()
             pool.join()
 
-    def stop():
+    def stop(self):
         ''' signal to the optimiser to stop and shutdown gracefully '''
         self._stop_flag.set()
 
@@ -1390,7 +1425,9 @@ class BayesianOptimisationOptimiser(Optimiser):
         if RangeType.Arbitrary in self.range_types.values():
             bad_ranges = [param for param, type_ in self.range_types.items()
                           if type_ == RangeType.Arbitrary]
-            raise ValueError('arbitrary ranges {} are not allowed with Bayesian optimisation'.format(bad_ranges))
+            raise ValueError('arbitrary ranges: {} are not allowed with Bayesian optimisation'.format(bad_ranges))
+        elif not self.ranges:
+            raise ValueError('empty ranges not allowed with Bayesian optimisation')
 
         # record the bounds only for the linear and logarithmic ranges
         self.range_bounds = {param: (min(self.ranges[param]), max(self.ranges[param])) for param in self.params}
@@ -1601,6 +1638,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         # having two samples too close together will 'break' the GP
         elif close_to_any(next_x, xs, self.close_tolerance):
             self._log('argmax(acquisition function) too close to an existing sample: choosing randomly instead')
+            #TODO: what about if the evaluator changes the config and happens to create a duplicate point?
             next_x = self._unique_random_config(different_from=xs, num_attempts=1000)
             next_ac = 0
             chosen_at_random = True
