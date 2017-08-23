@@ -5,6 +5,7 @@ TODO: module docstring
 # fix some of the python2 ugliness
 from __future__ import print_function
 from __future__ import division
+from __future__ import unicode_literals
 import sys
 if sys.version_info[0] == 3: # python 3
     from math import isclose, inf
@@ -20,6 +21,7 @@ import time
 import json
 import struct
 import os
+import warnings
 
 # for serialising Gaussian Process models for saving to disk
 import pickle
@@ -50,10 +52,29 @@ import plot3D
 # constants gathered here so that the defaults can be changed easily (eg for testing)
 DEFAULT_HOST = '0.0.0.0'
 DEFAULT_PORT = 9187
-CLIENT_POLL = 1.0 # seconds for the client to wait for a connection before retrying
-SERVER_POLL = 1.0 # seconds for the server to wait for a connection before retrying
+CLIENT_TIMEOUT = 1.0 # seconds for the client to wait for a connection before retrying
+SERVER_TIMEOUT = 1.0 # seconds for the server to wait for a connection before retrying
+#TODO only needed for sequential running. sequential should probably just crash if not ready. might want to make a note of the change in behaviour in _ready_for_next_configuration
 CONFIG_POLL = 0.1 # seconds to wait for the optimiser to be ready for another configuration before retrying
+#TODO: no longer need i think. check for other instances of time.sleep
 CHECKPOINT_POLL = 1.0 # seconds to wait for outstanding jobs to finish
+#TODO: make sure there is something logged on a last resort timeout
+# This is to prevent deadlock but if a socket times out then it may be fatal. At
+# least this way the problem is visible and you can restore from a checkpoint
+# rather than have it sit in deadlock forever.
+LAST_RESORT_TIMEOUT = 20.0 # seconds
+NON_CRITICAL_WAIT = 1.0 # seconds to wait after a non-critical network error before retrying
+
+def ON_EXCEPTION(e):
+    '''
+    Called when a critical exception is raised.
+    Can be used to ignore, re-raise, drop into debugger etc
+    '''
+    print(exception_string(), flush=True)
+    #print(exception_string())
+    #raise e
+    import pdb
+    pdb.set_trace()
 
 
 
@@ -67,12 +88,25 @@ class dotdict(dict):
         d.somekey   # 2
     '''
     def __getattr__(self, name):
-        return self[name]
+        try:
+            return self[name]
+        except KeyError:
+            raise AttributeError # have to convert to the correct exception
     def __setattr__(self, name, val):
         self[name] = val
     def copy(self):
         ''' copy.copy() does not work with dotdict '''
         return dotdict(dict.copy(self))
+
+class no_op_context():
+    '''
+    example usage:
+    with my_lock or null_context(): # if my_lock is sometimes None
+    '''
+    def __enter__(self):
+        pass
+    def __exit__(self, exc_type, exc_value, traceback):
+        pass
 
 def set_str(set_):
     '''
@@ -111,6 +145,13 @@ class NumpyJSONEncoder(json.JSONEncoder):
         else:
             return super(NumpyJSONEncoder, self).default(obj)
 
+def JSON_encode_binary(data):
+    ''' encode the given data in a compressed binary format, then encode that in base64 so that it can be stored compactly in a JSON string '''
+    return base64.b64encode(zlib.compress(pickle.dumps(data))).decode('utf-8')
+def JSON_decode_binary(data):
+    ''' decode data encoded with JSON_encode_binary '''
+    return pickle.loads(zlib.decompress(base64.b64decode(data)))
+
 def make2D(arr):
     ''' convert a numpy array with shape (l,) into an array with shape (l,1)
         (np.atleast_2d behaves similarly but would give shape (1,l) instead)
@@ -142,7 +183,7 @@ def time_string(seconds):
     dps = 1 # decimal places to display
     # if the number of seconds would round to an integer: display it as one
     if isclose(round(secs), secs, abs_tol=10**(-dps)): # like abs_tol=1e-dps
-        secs = '{:02d}'.format(round(secs))
+        secs = '{:02d}'.format(int(round(secs)))
     else:
         # 0N => pad with leading zeros up to a total length of N characters
         #       (including the decimal point)
@@ -210,16 +251,18 @@ class Job(object):
     a job is a single configuration to be tested, it may result in one or
     multiple samples being evaluated.
     '''
-    def __init__(self, config, job_num, setup_duration):
+    def __init__(self, config, num, setup_duration=0, evaluation_duration=0):
         '''
         config: the configuration to test
         job_num: a unique ID for the job
         setup_duration: the time taken for _next_configuration to generate 'config'
         '''
         self.config = config
-        self.num = job_num
-        self.start_time = time.time()
+        self.num = num
         self.setup_duration = setup_duration
+        self.evaluation_duration = evaluation_duration
+    def total_time(self):
+        return self.setup_duration + self.evaluation_duration
 
 class Sample(object):
     '''
@@ -271,12 +314,19 @@ def send_empty(conn):
     conn.sendall(struct.pack('!I', 0))
 
 def read_exactly(conn, num_bytes):
-    ''' read exactly the given number of bytes from the connection '''
+    '''
+    read exactly the given number of bytes from the connection
+    returns None if the connection closes before the number of bytes is reached
+    '''
     data = bytes()
     while len(data) < num_bytes: # until the length is fully read
         left = num_bytes - len(data)
         # documentation recommends a small power of 2 to give best results
-        data += conn.recv(min(4096, left))
+        chunk = conn.recv(min(4096, left))
+        if len(chunk) == 0: # connection broken: will never receive any data over conn again
+            return None
+        else:
+            data += chunk
     assert len(data) == num_bytes
     return data
 
@@ -284,13 +334,27 @@ def recv_json(conn):
     '''
     receive a JSON object from the given connection
     '''
-    # read the length
-    data = read_exactly(conn, 4)
+    # read the length. Be lenient with the connection here since once the length
+    # is received the peer obviously wants to communicate, but until then we are
+    # not sure. If the connection breaks or times out before the length is read,
+    # treat that as if a length of 0 was transmitted.
+    try:
+        data = read_exactly(conn, 4)
+    except socket.timeout: # last resort timeout to prevent deadlock
+        return None
+    except socket.error as e:
+        if e.errno == 104: # connection reset by peer
+            return None
+        else:
+            raise e
+    if data is None: # connection closed before a length was sent
+        return None # indicates 'no data'
     length, = struct.unpack('!I', data) # see send_json for the protocol
     if length == 0:
         return None # indicates 'no data'
     else:
         data = read_exactly(conn, length)
+        assert data is not None, 'json data is None because the connection closed'
         obj = json.loads(data.decode('utf-8'))
         return obj
 
@@ -334,8 +398,139 @@ class Evaluator(object):
         self.noisy = False
         self._stop_flag = threading.Event() # is_set() => finish gracefully and stop
 
+    def _make_connection(self, host, port, timeout, ignore_stop_flag):
+        connected = False
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # TCP
+        self.log('attempting to connect to {}:{}'.format(host, port))
+        sock.settimeout(timeout) # only while trying to connect
+
+        # connect to the server
+        while ignore_stop_flag or not self.wants_to_stop():
+            try:
+                sock.connect((host, port))
+                self.log('connection established')
+                # should never time out, but don't want deadlock
+                sock.settimeout(LAST_RESORT_TIMEOUT)
+                connected = True
+                break
+            except socket.timeout:
+                continue # this is normal and intentional to keep checking _stop_flag
+            except socket.error as e:
+                # socket.error is a catch-all instead of manually
+                # dealing with individual exceptions. The ones I have
+                # encountered are: ConnectionRefusedError,
+                # ConnectionAbortedError, ConnectionResetError,
+                # BlockingIOError, SIGPIPE
+
+                # don't add the full traceback because it will break the unit tests and it isn't necessary
+                self.log('Non-critical error trying to connect to optimiser (will retry): {}: {}'.format(type(e), e))
+                #print(e, flush=True)
+                time.sleep(NON_CRITICAL_WAIT) # good idea to wait before trying again
+                continue
+
+        if not ignore_stop_flag and self.wants_to_stop():
+            if connected:
+                self.log('shutting down connection')
+                send_empty(sock)
+            sock.close() # close (free resources) regardless of whether connection was made
+            return None
+        else:
+            return sock
+
+    def _request_job(self, connect_args):
+        sock = self._make_connection(*connect_args, ignore_stop_flag=False)
+        if sock is None: # evaluator wants to shut down
+            return None
+        try:
+            try:
+                send_json(sock, {'type' : 'job_request'})
+            except socket.error as e:
+                if e.errno == 104: # connection reset by peer
+                    return None
+                elif e.errno == 32: # broken pipe
+                    return None
+                else:
+                    raise e
+
+            job = recv_json(sock)
+
+            if job is None: # optimiser signalled no job available
+                self.log('no job available')
+                return None
+            else:
+                # job has 'config', 'num' and 'setup_duration' fields
+                assert set(job.keys()) == set(['config', 'num', 'setup_duration']), 'malformed job request: {}'.format(job)
+                #TODO if the job is malformed, don't ACK, instead log the error and discard the job
+                return job
+        finally:
+            sock.close()
+
+    def _process_job(self, job, connect_args):
+        start_time = time.time()
+        job_num = job['num']
+        config = dotdict(job['config'])
+
+        self.log('evaluating job {}: config: {}'.format(
+            job_num, config_string(config, precise=True)))
+        results = self.test_config(config)
+        samples = Evaluator.samples_from_test_results(results, config)
+        # for JSON serialisation
+        samples = [(s.config, s.cost, s.extra) for s in samples]
+
+        # will make a connection regardless of whether stop_flag is set
+        sock = self._make_connection(*connect_args, ignore_stop_flag=True)
+        assert sock is not None
+        # don't print extra values because it could be large
+        self.log('returning results: {}'.format([(config, cost, list(extra.keys())) for config, cost, extra in samples]))
+        try:
+            # add this field
+            job['evaluation_duration'] = time.time()-start_time
+            msg_dict = {
+                'type' : 'job_results',
+                'job' : job,
+                'samples' : samples
+            }
+            send_json(sock, msg_dict, encoder=NumpyJSONEncoder)
+        finally:
+            sock.close()
+
     def run_client(self, host=DEFAULT_HOST, port=DEFAULT_PORT, max_jobs=inf,
-                   poll_interval=CLIENT_POLL):
+                   timeout=CLIENT_TIMEOUT):
+        self._stop_flag.clear()
+        num_jobs = 0
+        connect_args = (host, port, timeout)
+        try:
+            while not self.wants_to_stop() and num_jobs < max_jobs:
+                job = self._request_job(connect_args)
+                if job is None:
+                    # either no job available, in which case try again, or the
+                    # evaluator wants to shut down, in which case the loop will stop.
+                    if self.wants_to_stop():
+                        break
+                    else:
+                        time.sleep(NON_CRITICAL_WAIT)
+                        continue
+                else:
+                    # will return the results regardless of whether the stop
+                    # flag is set because the contract with the server is that
+                    # the evaluator _must_ return the results of a job it
+                    # started.
+                    self._process_job(job, connect_args)
+                    num_jobs += 1
+
+            if self.wants_to_stop():
+                self.log('stopping because of manual shut down')
+            elif num_jobs >= max_jobs:
+                self.log('stopping because max_jobs reached')
+        except Exception as e:
+            self.log('Exception raised during client run:\n{}'.format(exception_string()))
+            ON_EXCEPTION(e)
+        finally:
+            self.log('evaluator shut down')
+
+
+    def run_client_old(self, host=DEFAULT_HOST, port=DEFAULT_PORT, max_jobs=inf,
+                   poll_interval=CLIENT_TIMEOUT):
         '''
         receive jobs from an Optimiser server and evaluate them until the server
         shuts down.
@@ -361,7 +556,19 @@ class Evaluator(object):
                     try:
                         sock.connect((host, port))
                         break
-                    except (socket.timeout, ConnectionRefusedError, ConnectionAbortedError):
+                    except socket.timeout:
+                        continue # this is normal and intentional to keep checking _stop_flag
+                    except socket.error as e:
+                        # socket.error is a catch-all instead of manually
+                        # dealing with individual exceptions. The ones I have
+                        # encountered are: ConnectionRefusedError,
+                        # ConnectionAbortedError, ConnectionResetError,
+                        # BlockingIOError
+
+                        #TODO: handle SIGPIPE
+                        # don't add the full traceback because it will break the unit tests and it isn't necessary
+                        self.log('Non-critical error trying to connect to optimiser (will retry): {}: {}'.format(type(e), e))
+                        time.sleep(1) # good idea to wait before trying again
                         continue
                 if self._stop_flag.is_set():
                     break
@@ -371,8 +578,8 @@ class Evaluator(object):
 
                 try:
                     job = recv_json(sock)
-                except ConnectionResetError:
-                    self.log('FAILED to receive job from optimiser (ConnectionResetError)')
+                except socket.error as e:
+                    self.log('FAILED to receive job from optimiser ({}: {})'.format(type(e), e))
                     continue
 
                 # optimiser finished and sent 0 length to inform the evaluator
@@ -401,8 +608,9 @@ class Evaluator(object):
                 self.log('stopping because of manual shut down')
             elif num_jobs >= max_jobs:
                 self.log('stopping because max_jobs reached')
-        except Exception:
+        except Exception as e:
             self.log('Exception raised during client run:\n{}'.format(exception_string()))
+            ON_EXCEPTION(e)
         finally:
             self.log('evaluator shutting down')
             if sock is not None:
@@ -411,6 +619,8 @@ class Evaluator(object):
     def stop(self):
         ''' signal to the evaluator client to stop and shutdown gracefully '''
         self._stop_flag.set()
+    def wants_to_stop(self):
+        return self._stop_flag.is_set()
 
     def log(self, msg, newline=True):
         '''
@@ -494,7 +704,7 @@ class Optimiser(object):
         self.num_finished_jobs = 0 # number of finished jobs
         self.finished_job_ids = set() # job.num is added after it is finished
 
-        self.duration = 0 # total time spent running (persists across runs)
+        self.duration = 0.0 # total time (seconds) spent running (persists across runs)
 
         # written to by _log()
         self.log_record = ''
@@ -524,10 +734,11 @@ class Optimiser(object):
         if newline:
             msg += '\n'
 
-        #TODO: see if this works
         # used to make parsing of separate log entries easier
-        sep = u'\u2063' # INVISIBLE SEPARATOR' (U+2063)
-        self.log_record += sep + msg
+        #sep = u'\u2063' # 'INVISIBLE SEPARATOR' (U+2063)
+        #self.log_record += sep + msg + sep
+
+        self.log_record += msg
         if self.noisy:
             print(msg, end='')
 
@@ -549,8 +760,7 @@ class Optimiser(object):
         get the next configuration and return a job object for it (or return
         None if there are no more configurations)
         '''
-        self._wait_for_ready()
-
+        assert self._ready_for_next_configuration()
         job_num = self.num_started_jobs+1 # job number is 1-based
 
         # for Bayesian optimisation this may take a little time
@@ -571,16 +781,14 @@ class Optimiser(object):
         '''
         check the results of the job are valid, record them and post to the log
         '''
-        duration = time.time()-job.start_time
-
         samples = Evaluator.samples_from_test_results(results, job.config)
         self.samples.extend(samples)
         self.num_finished_jobs += 1
         self.finished_job_ids.add(job.num)
 
         self._log('finished job {} in {} (setup: {} evaluation: {}):'.format(
-            job.num, time_string(duration+job.setup_duration),
-            time_string(job.setup_duration), time_string(duration)
+            job.num, time_string(job.total_time()),
+            time_string(job.setup_duration), time_string(job.evaluation_duration)
         ))
         for i, s in enumerate(samples):
             self._log('\tsample {:02}: config={}, cost={:.2g}{}'.format(
@@ -613,20 +821,21 @@ class Optimiser(object):
             self._log('stopped for an unknown reason. May be in an inconsistent state. (details: {} / {} / {})'.format(
                 self._stop_flag.is_set(), out_of_configs, outstanding_jobs))
 
-    def _handle_checkpoint(self):
+    def _handle_checkpoint(self, lock=None):
         ''' handle saving a checkpoint during a run if signalled to '''
         if self._checkpoint_flag.is_set():
-            self._checkpoint_flag.clear()
-
             if self.num_started_jobs > self.num_finished_jobs:
-                self._log('waiting for {} outstanding jobs to finish before taking a snapshot')
+                self._log('waiting for {} outstanding jobs to finish before taking a snapshot'.format(
+                    self.num_started_jobs-self.num_finished_jobs))
                 while self.num_started_jobs > self.num_finished_jobs:
                     time.sleep(CHECKPOINT_POLL)
 
-            self._log('saving checkpoint to "{}"'.format(self.checkpoint_filename))
-            self.save_now()
+            with lock or no_op_context(): # use no-op if lock is None
+                self._log('saving checkpoint to "{}"'.format(self.checkpoint_filename))
+                self.save_now()
+                self._checkpoint_flag.clear()
 
-    def _handle_client(self, conn, lock, exception_caught, job):
+    def _handle_client_old(self, conn, lock, exception_caught, job):
         '''
         run as part of a thread pool, interact with a remote evaluator and
         process the results
@@ -646,18 +855,220 @@ class Optimiser(object):
 
             with lock:
                 self._process_job_results(job, results)
-        except Exception:
+        except Exception as e:
             exception_caught.set()
             with lock:
                 self._log('Exception raised while processing job {} (in a worker thread):\n{}'.format(
                     job.num, exception_string()))
+            ON_EXCEPTION(e)
         finally:
             conn.close()
 
-    def run_server(self, host=DEFAULT_HOST, port=DEFAULT_PORT, max_clients=4,
-                   max_jobs=inf, poll_interval=SERVER_POLL):
+    def _accept_connection(self, sock):
         '''
-        run a server which serves jobs to any listening evaluators
+        wait for a client to connect
+        note: may throw exceptions
+        note: may return a connection even if stop flag is set
+        '''
+        while not self._stop_flag.is_set():
+            try:
+                # conn is another socket object
+                conn, addr = sock.accept()
+                self._log('connection from {}:{}'.format(*addr))
+                return conn, addr
+            except socket.timeout:
+                # if the checkpoint flag is set, give clients a chance to
+                # connect (unlike with the stop flag) but if there are none
+                # waiting, return so the optimiser can check if it is ready to
+                # make a checkpoint.
+                if self._checkpoint_flag.is_set():
+                    return None, None
+                else:
+                    continue
+        return None, None
+
+    def _handle_client(self, conn, state, max_jobs):
+        '''
+        handle a single interaction with a client
+        '''
+        try:
+            msg = recv_json(conn)
+        except socket.timeout:
+            self._log('evaluator connection timed out')
+            conn.shutdown(socket.SHUT_RDWR)
+            time.sleep(NON_CRITICAL_WAIT)
+            return
+
+        #TODO: if msg is not None: check that 'type' in keys
+        if msg is None: # evaluator wishes to shutdown
+            self._log('evaluator requested nothing')
+            conn.shutdown(socket.SHUT_RDWR)
+            time.sleep(NON_CRITICAL_WAIT)
+
+        elif msg['type'] == 'job_request':
+            if state.started_this_run >= max_jobs:
+                self._log('not allowing new jobs (stopping)')
+                send_empty(conn)
+            elif self._checkpoint_flag.is_set():
+                self._log('not allowing new jobs (taking checkpoint)')
+                send_empty(conn)
+            elif not self._ready_for_next_configuration():
+                self._log('not allowing new jobs (not ready)')
+                send_empty(conn)
+            else:
+                job = self._next_job()
+                if job is None:
+                    state.out_of_configs = True
+                    send_empty(conn) # signal no more jobs available
+                else:
+                    state.started_job_ids.add(job.num)
+                    state.started_this_run += 1
+                    job_dict = {
+                        'config' : job.config,
+                        'num' : job.num,
+                        'setup_duration' : job.setup_duration
+                    }
+                    send_json(conn, job_dict, encoder=NumpyJSONEncoder)
+
+        elif msg['type'] == 'job_results':
+            assert set(msg.keys()) == set(['type', 'job', 'samples']), 'malformed message: {}'.format(msg)
+            assert set(msg['job'].keys()) == set(['config', 'num', 'setup_duration', 'evaluation_duration']), 'malformed job message: {}'.format(msg['job'])
+
+            if msg['job']['num'] not in state.started_job_ids:
+                self._log('Non-critical error: received results from a job that was not started this run: {}'.format(msg))
+
+            elif msg['job']['num'] in self.finished_job_ids:
+                self._log('Non-critical error: received results from a job that is already finished: {}'.format(msg))
+
+            else:
+                # during transmission: serialised to tuples
+                results = [Sample(dotdict(config), cost, extra)
+                        for config, cost, extra in msg['samples']]
+                job = Job(**msg['job'])
+                self._process_job_results(job, results)
+                state.finished_this_run += 1
+
+        else:
+            raise Exception('invalid request: {}'.format(msg))
+
+    def run_server(self, host=DEFAULT_HOST, port=DEFAULT_PORT, max_jobs=inf,
+                   timeout=SERVER_TIMEOUT):
+        self._log('starting optimisation server at {}:{}'.format(host, port))
+
+        self._stop_flag.clear()
+        old_duration = self.duration # duration as-of the start of this run
+        checkpoint_flag_was_set = False # to only log once
+
+        class RunState:
+            def __init__(self):
+                self.start_time = time.time()
+
+                # count number of jobs started and finished this run
+                self.started_this_run = 0
+                self.finished_this_run = 0
+                self.started_job_ids = set()
+
+                # flags to diagnose the stopping conditions
+                self.out_of_configs = False
+                self.exception_caught = False
+
+            def run_time(self):
+                return time.time() - self.start_time
+            def num_outstanding_jobs(self):
+                return self.started_this_run - self.finished_this_run
+        state = RunState()
+
+        sock = None
+        try:
+            # server socket for the clients to connect to
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # TCP
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) # able to re-use host/port combo even if in use
+            sock.bind((host, port))
+        except Exception as e:
+            self._log('failed to set up optimiser server with exception: {}'.format(exception_string()))
+            return
+
+        #TODO
+        sock.listen(16) # maximum number of connections allowed to queue
+        sock.settimeout(timeout) # timeout for accept, not inherited by the client connections
+
+        conn = None
+        try:
+            ready_to_stop = lambda: self._stop_flag.is_set() and state.num_outstanding_jobs() == 0
+            while (not ready_to_stop() and
+                   state.finished_this_run < max_jobs and
+                   not state.out_of_configs):
+
+                #self._log('waiting for a connection')
+                #outstanding = started_job_ids - self.finished_job_ids
+                #self._log('outstanding job IDs: {}'.format(set_str(outstanding)))
+
+                # deal with checkpoints
+                if self._checkpoint_flag.is_set():
+                    outstanding_count = state.num_outstanding_jobs()
+                    if outstanding_count > 0 and not checkpoint_flag_was_set:
+                        self._log('waiting for {} outstanding jobs to finish before taking a snapshot'.format(
+                            outstanding_count))
+                        checkpoint_flag_was_set = True
+                    elif outstanding_count == 0:
+                        self.save_now()
+                        self._checkpoint_flag.clear()
+                        checkpoint_flag_was_set = False
+                    elif outstanding_count < 0:
+                        raise ValueError(outstanding_count)
+
+
+                conn, addr = self._accept_connection(sock)
+                if conn is None:
+                    # stop flag was set _before_ a client connected
+                    # or checkpoint flag was set _and_ no client connected
+                    continue
+                # stop flag may be set after the client connected, in which case we
+                # have to serve that client before stopping
+
+
+                try:
+                    conn.settimeout(LAST_RESORT_TIMEOUT)
+                    self._handle_client(conn, state, max_jobs)
+                finally:
+                    conn.close()
+                    conn = None
+
+                self.duration = old_duration + state.run_time()
+
+        except Exception as e:
+            self._log('Exception raised during run:\n{}'.format(exception_string()))
+            state.exception_caught = True
+            ON_EXCEPTION(e)
+        finally:
+            if sock is not None:
+                sock.shutdown(socket.SHUT_RDWR)
+                #TODO: how much waiting is required?
+                #time.sleep(1)
+                sock.close()
+            if conn is not None:
+                conn.close()
+
+        if self._checkpoint_flag.is_set():
+            self._log('saving checkpoint to "{}"'.format(self.checkpoint_filename))
+            self.save_now()
+            self._checkpoint_flag.clear()
+
+        max_jobs_exceeded = state.finished_this_run >= max_jobs
+        #TODO refactor to just pass state
+        self._shutdown_message(old_duration, state.run_time(),
+                               max_jobs_exceeded, state.out_of_configs, state.exception_caught)
+
+
+
+    def run_server_old(self, host=DEFAULT_HOST, port=DEFAULT_PORT, max_clients=4,
+                   max_jobs=inf, poll_interval=SERVER_TIMEOUT):
+        '''
+        run a server which serves jobs to any listening evaluators. Evaluator
+        clients are assumed to be interchangeable, performing the same
+        calculations, excluding some random variation. Evaluators may process
+        jobs at different rates, faster evaluators will be assigned more jobs
+        and so need not sit idle.
 
         host: the hostname/IP for the optimiser to listen on
         port: the port number for the optimiser to listen on
@@ -692,7 +1103,21 @@ class Optimiser(object):
             # server socket for the clients to connect to
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # TCP
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) # able to re-use host/port combo even if in use
-            sock.bind((host, port))
+
+            # for some reason even with REUSEADDR the socket may fail to bind.
+            # it may be because it takes a moment for the socket to reset after closing
+            while True:
+                try:
+                    sock.bind((host, port))
+                    break
+                except OSError as e:
+                    if e.errno == 98: # address already in use
+                        self._log('address already in use, try again')
+                        time.sleep(1)
+                        continue
+                    else:
+                        raise e
+
             sock.listen(max_clients) # enable listening on the socket. backlog=max_clients
             sock.settimeout(poll_interval) # timeout for accept, not inherited by the client connections
 
@@ -707,7 +1132,7 @@ class Optimiser(object):
 
                 # wait for a client to connect
                 while not self._stop_flag.is_set() and not exception_in_pool.is_set():
-                    self._handle_checkpoint() # save a checkpoint if signalled to
+                    self._handle_checkpoint(lock) # save a checkpoint if signalled to
                     try:
                         # conn is another socket object
                         conn, addr = sock.accept()
@@ -715,7 +1140,7 @@ class Optimiser(object):
                     except socket.timeout:
                         conn = None
                         continue
-                if self._stop_flag.is_set():
+                if self._stop_flag.is_set() or exception_in_pool.is_set():
                     break
 
                 with lock:
@@ -735,7 +1160,7 @@ class Optimiser(object):
                         break
                     started_job_ids.add(job.num)
 
-                pool.apply_async(self._handle_client, (conn, lock, exception_in_pool, job))
+                pool.apply_async(self._handle_client_old, (conn, lock, exception_in_pool, job))
                 #self._handle_client(conn, lock, exception_in_pool, job)
 
                 conn = None
@@ -743,9 +1168,10 @@ class Optimiser(object):
                 with lock:
                     self.duration = old_duration + (time.time()-run_start_time)
 
-        except Exception:
+        except Exception as e:
             self._log('Exception raised during run:\n{}'.format(exception_string()))
             exception_caught = True
+            ON_EXCEPTION(e)
         finally:
             # stop accepting new connections
             if sock is not None:
@@ -765,6 +1191,8 @@ class Optimiser(object):
                 self._log('notifying client which was waiting for a job')
                 send_empty(conn)
                 conn.close()
+
+        self._handle_checkpoint() # save a checkpoint if signalled to
 
         this_duration = time.time() - run_start_time
         max_jobs_exceeded = num_jobs >= max_jobs
@@ -795,21 +1223,27 @@ class Optimiser(object):
 
             while not self._stop_flag.is_set() and num_jobs < max_jobs:
                 self._handle_checkpoint() # save a checkpoint if signalled to
+                self._wait_for_ready()
                 job = self._next_job()
                 if job is None:
                     out_of_configs = True
                     break
 
+                evaluation_start = time.time()
                 results = evaluator.test_config(job.config)
+                job.evaluation_duration = time.time() - evaluation_start
 
                 self._process_job_results(job, results)
 
                 num_jobs += 1
                 self.duration = old_duration + (time.time()-run_start_time)
 
-        except Exception:
+        except Exception as e:
             self._log('Exception raised during run:\n{}'.format(exception_string()))
             exception_caught = True
+            ON_EXCEPTION(e)
+
+        self._handle_checkpoint() # save a checkpoint if signalled to
 
         this_duration = time.time() - run_start_time
         max_jobs_exceeded = num_jobs >= max_jobs
@@ -828,7 +1262,7 @@ class Optimiser(object):
         try:
             for e in evaluators:
                 pool.apply_async(e.run_client)
-            self.run_server(max_clients=num_clients, max_jobs=max_jobs)
+            self.run_server(max_jobs=max_jobs)
         finally:
             # the pool is the optimiser's responsibility, so make sure it gets
             # shut down gracefully
@@ -840,7 +1274,6 @@ class Optimiser(object):
     def stop(self):
         ''' signal to the optimiser to stop and shutdown gracefully '''
         self._stop_flag.set()
-
 
     def _ready_for_next_configuration(self):
         '''
@@ -1026,6 +1459,17 @@ class Optimiser(object):
 
 # Saving and Loading Checkpoints
 
+    def _consistent_and_quiescent(self):
+        '''
+        Whether the optimiser is in a consistent state (no problems) and
+        quiescent (not currently evaluating any jobs).
+        '''
+        no_outstanding_jobs = (
+            self.num_started_jobs == self.num_finished_jobs and
+            len(self.finished_job_ids) == self.num_finished_jobs
+        )
+        return no_outstanding_jobs
+
     def save_when_ready(self, filename=None):
         '''
         while running, save the progress of the optimiser to a checkpoint at the
@@ -1037,6 +1481,7 @@ class Optimiser(object):
 
         note: will not save until the optimiser starts if the optimiser is not
               currently running
+        note: the checkpoint is ready once self._checkpoint_flag is cleared
         '''
         if filename is not None:
             self.checkpoint_filename = filename
@@ -1058,7 +1503,14 @@ class Optimiser(object):
               optimiser initialised identically to this one should load the
               checkpoint.
         '''
-        filename = filename if filename is not None else self.checkpoint_filename
+        assert self._consistent_and_quiescent()
+
+        # either use the default value or set the default value
+        if filename is None:
+            filename = self.checkpoint_filename
+        else:
+            self.checkpoint_filename = filename
+        self._log('saving checkpoint to "{}"'.format(filename))
 
         # keep counting until a filename is available
         if os.path.isfile(filename):
@@ -1070,8 +1522,11 @@ class Optimiser(object):
             filename = name + str(count) + ext
             self._log('writing to "{}" instead'.format(filename))
 
+        save = json.dumps(self._save_dict(), indent=2, sort_keys=True, cls=NumpyJSONEncoder)
         with open(filename, 'w') as f:
-            f.write(json.dumps(self._save_dict(), indent=2, cls=NumpyJSONEncoder))
+            f.write(save)
+
+        assert self._consistent_and_quiescent()
 
     def load_checkpoint(self, filename=None):
         '''
@@ -1079,8 +1534,7 @@ class Optimiser(object):
         (note: the optimiser must be initialised identically to when the
         checkpoint was saved).
 
-        This method assumes that the optimiser is quiescent for the duration of
-        the load
+        This method assumes that the optimiser is _not_running_
 
         filename: the location to load the checkpoint from, or None to use
                   self.checkpoint_filename
@@ -1088,7 +1542,15 @@ class Optimiser(object):
         filename = filename if filename is not None else self.checkpoint_filename
 
         with open(filename, 'r') as f:
-            self._load_dict(json.loads(f.read()))
+            try:
+                save = json.loads(f.read())
+            except json.JSONDecodeError as e:
+                self._log('exception: invalid checkpoint! Cannot load JSON: {}'.format(exception_string()))
+                ON_EXCEPTION(e)
+                return
+            self._load_dict(save)
+
+        assert self._consistent_and_quiescent()
 
 
     def _save_dict(self):
@@ -1100,14 +1562,15 @@ class Optimiser(object):
         if best is None:
             best = Sample({}, inf)
         return {
-            'samples' : [(s.config, s.cost, s.extra) for s in self.samples],
-            'num_started_jobs' : self.num_started_jobs,
+            'samples' : [(s.config, s.cost, JSON_encode_binary(s.extra)) for s in self.samples],
+            'num_started_jobs' : self.num_started_jobs, # must be equal to num_finished_jobs
             'num_finished_jobs' : self.num_finished_jobs,
             'finished_job_ids' : list(self.finished_job_ids),
             'duration' : self.duration,
-            'log' : self.log_record,
+            'log_record' : self.log_record,
+            'checkpoint_filename' : self.checkpoint_filename,
             # convenience for viewing the save, but will not be loaded
-            'best_sample' : {'config' : best.config, 'cost' : best.cost}
+            'best_sample' : {'config' : best.config, 'cost' : best.cost, 'extra' : best.extra}
         }
 
     def _load_dict(self, save):
@@ -1115,13 +1578,29 @@ class Optimiser(object):
         load progress from a dictionary
         (designed to be overridden by derived classes in order to load specialised data)
         '''
-        self.samples = [Sample(dotdict(config), cost, extra)
+        self.samples = [Sample(dotdict(config), cost, JSON_decode_binary(extra))
                         for config, cost, extra in save['samples']]
         self.num_started_jobs = save['num_started_jobs']
         self.num_finished_jobs = save['num_finished_jobs']
         self.finished_job_ids = set(save['finished_job_ids'])
         self.duration = save['duration']
-        self.log_record = save['log']
+        self.log_record = save['log_record']
+        self.checkpoint_filename = save['checkpoint_filename']
+
+    def __getstate__(self):
+        '''
+        used instead of __dict__ for pickling and copying.
+        Excludes non-pickleable attributes.
+        '''
+        return {k:v for k, v in self.__dict__.items() if k not in
+                ['_stop_flag', '_checkpoint_flag']}
+
+    def __setstate__(self, state):
+        ''' restore from a pickled state (with default values for non-pickleable attributes '''
+        self.__dict__ = state
+        self._stop_flag = threading.Event()
+        self._checkpoint_flag = threading.Event()
+
 
 
 class GridSearchOptimiser(Optimiser):
@@ -1135,7 +1614,7 @@ class GridSearchOptimiser(Optimiser):
             appearing earlier => more 'primary' (changes more often)
             default could be any order
         '''
-        super(self.__class__, self).__init__(ranges, maximise_cost)
+        super(GridSearchOptimiser, self).__init__(ranges, maximise_cost)
         self.order = list(ranges.keys()) if order is None else order
         assert set(self.order) == set(ranges.keys())
         # start at the lower boundary for each parameter
@@ -1174,13 +1653,13 @@ class GridSearchOptimiser(Optimiser):
             return cur
 
     def _save_dict(self):
-        save = super(self.__class__, self)._save_dict()
+        save = super(GridSearchOptimiser, self)._save_dict()
         save['progress'] = self.progress
         save['progress_overflow'] = self.progress_overflow
         return save
 
     def _load_dict(self, save):
-        super(self.__class__, self)._load_dict(save)
+        super(GridSearchOptimiser, self)._load_dict(save)
         self.progress = save['progress']
         self.progress_overflow = save['progress_overflow']
 
@@ -1202,7 +1681,7 @@ class RandomSearchOptimiser(Optimiser):
             before giving up (to exhaustively explore the parameter space,
             perhaps finish off with a grid search?)
         '''
-        super(self.__class__, self).__init__(ranges, maximise_cost)
+        super(RandomSearchOptimiser, self).__init__(ranges, maximise_cost)
         self.allow_re_tests = allow_re_tests
         self.tested_configurations = set()
         self.max_retries = max_retries
@@ -1212,7 +1691,7 @@ class RandomSearchOptimiser(Optimiser):
         if self.allow_re_tests:
             return inf
         else:
-            return super(self.__class__, self).configuration_space_size()
+            return super(RandomSearchOptimiser, self).configuration_space_size()
 
     def _random_config(self):
         return {param : np.random.choice(param_range) for param, param_range in self.ranges.items()}
@@ -1226,6 +1705,8 @@ class RandomSearchOptimiser(Optimiser):
         # only use parameters relevant to the optimiser, ie the ones from ranges.keys()
         # (evaluators may introduce new parameters to a configuration)
         return '|'.join([str(config[param]) for param in self.params]) # self.params is sorted
+        #TODO: try this. convert numpy arrays and lists to strings
+        return hash(frozenset(config.items()))
 
     def _next_configuration(self, job_num):
         c = self._random_config()
@@ -1237,11 +1718,12 @@ class RandomSearchOptimiser(Optimiser):
             if attempts >= self.max_retries:
                 self._log('max number of retries ({}) exceeded, most of the parameter space must have been explored. Quitting...'.format(self.max_retries))
                 return None # done
+            #TODO: won't work if evaluator changed the config
             self.tested_configurations.add(self._hash_config(c))
         return c
 
     def _load_dict(self, save):
-        super(self.__class__, self)._load_dict(save)
+        super(RandomSearchOptimiser, self)._load_dict(save)
         if not self.allow_re_tests:
             self.tested_configurations = set([self._hash_config(s.config) for s in self.samples])
 
@@ -1379,7 +1861,7 @@ class BayesianOptimisationOptimiser(Optimiser):
             server with multiple client evaluators).
         '''
         ranges = {param:np.array(range_) for param, range_ in ranges.items()} # numpy arrays are required
-        super(self.__class__, self).__init__(ranges, maximise_cost)
+        super(BayesianOptimisationOptimiser, self).__init__(ranges, maximise_cost)
 
         self.acquisition_function_params = ({} if acquisition_function_params is None
                                             else acquisition_function_params)
@@ -1415,6 +1897,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         else:
             self.gp_params = gp_params
 
+        assert pre_samples > 1, 'not enough pre-samples'
         self.pre_samples = pre_samples
         self.ac_num_restarts = ac_num_restarts
         self.close_tolerance = close_tolerance
@@ -1542,13 +2025,19 @@ class BayesianOptimisationOptimiser(Optimiser):
             starting_point = self.config_to_point(self._random_config())
 
             # result is an OptimizeResult object
-            result = scipy.optimize.minimize(
-                fun=neg_acquisition_function,
-                x0=starting_point,
-                bounds=self.point_bounds,
-                method='L-BFGS-B', # Limited-Memory Broyden-Fletcher-Goldfarb-Shanno Bounded
-                options=dict(maxiter=15000) # maxiter=15000 is default
-            )
+            # if something goes wrong, scikit will write a warning to stderr by
+            # default. Instead capture the warnings and log them
+            with warnings.catch_warnings(record=True) as w:
+                result = scipy.optimize.minimize(
+                    fun=neg_acquisition_function,
+                    x0=starting_point,
+                    bounds=self.point_bounds,
+                    method='L-BFGS-B', # Limited-Memory Broyden-Fletcher-Goldfarb-Shanno Bounded
+                    options=dict(maxiter=15000) # maxiter=15000 is default
+                )
+                if len(w) > 0:
+                    for warn in w:
+                        self._log('warning when maximising the acquisition function: {}'.format(warn))
             if not result.success:
                 self._log('restart {}/{} of negative acquisition minimisation failed'.format(
                     j, self.ac_num_restarts))
@@ -1611,11 +2100,21 @@ class BayesianOptimisationOptimiser(Optimiser):
         # because the model is definitely 'clean' each time. In my tests,
         # there was no perceptible difference in timing.
         gp_model = gp.GaussianProcessRegressor(**self.gp_params)
-        # NOTE: fitting only optimises _certain_ kernel parameters with given
-        # bounds, see gp_model.kernel_.theta for the optimised kernel
-        # parameters.
-        # NOTE: RBF(...) has NO parameters to optimise, however 1.0 * RBF(...) does!
-        gp_model.fit(xs, ys)
+        # the optimiser may fail for various reasons, one being that 'the
+        # function is dominated by noise'. In one example I looked at the GP was
+        # still sensible even with the warning, so ignoring it should be fine.
+        # Worst case scenario is that a few bad samples are taken before the GP
+        # sorts itself out again.
+        with warnings.catch_warnings(record=True) as w:
+            # NOTE: fitting only optimises _certain_ kernel parameters with given
+            # bounds, see gp_model.kernel_.theta for the optimised kernel
+            # parameters.
+            # NOTE: RBF(...) has NO parameters to optimise, however 1.0 * RBF(...) does!
+            gp_model.fit(xs, ys)
+
+            if len(w) > 0:
+                for warn in w:
+                    self._log('warning when fitting the gp: {}'.format(warn))
 
         # gp_model.kernel_ is a copy of gp_model.kernel with the parameters optimised
         #self._log('GP params={}'.format(gp_model.kernel_.theta))
@@ -1655,7 +2154,7 @@ class BayesianOptimisationOptimiser(Optimiser):
 
 
         self.step_log[job_num] = dict(
-            gp = gp_model,
+            gp=gp_model,
             sx=sx, sy=sy,
             hx=hx, hy=hy,
             best_sample=best_sample,
@@ -1863,10 +2362,52 @@ class BayesianOptimisationOptimiser(Optimiser):
 
         return dotdict(config)
 
+    def _consistent_and_quiescent(self):
+        # super class checks general properties
+        sup = super(BayesianOptimisationOptimiser, self)._consistent_and_quiescent()
+        # either not waiting for a job, or waiting for a job which has finished
+        not_waiting = (
+            self.wait_for_job is None or
+            self.wait_for_job in self.finished_job_ids
+        )
+        # either there are no hypothesised samples, or they are for jobs which
+        # have already finished and just haven't been removed yet.
+        no_hypotheses = (
+            len(self.hypothesised_samples) == 0 or
+            all(job_id in self.finished_job_ids for job_id, sample in
+                 self.hypothesised_samples)
+        )
+        # 1. make sure that the arrays are exactly 2 dimensional
+        # 2. make sure that there are equal numbers of rows in the samples (and
+        # hypothesised samples) xs and ys (ie every x must have a y).
+        # 3. make sure that there is only 1 output attribute for each y
+        eq_rows = lambda a, b: a.shape[0] == b.shape[0]
+        is_2d = lambda x: len(x.shape) == 2
+        try:
+            step_log_valid = (
+                all(all([
+                    is_2d(step['sx']), is_2d(step['sy']),
+                    is_2d(step['hx']), is_2d(step['hy']),
+                    is_2d(step['next_ac']), is_2d(step['argmax_acquisition']),
 
+                    eq_rows(step['sx'], step['sy']),
+                    eq_rows(step['hx'], step['hy']),
+
+                    step['hy'].shape[1] == step['sy'].shape[1] == 1,
+
+                ]) for job_id, step in self.step_log.items())
+            )
+        except IndexError:
+            # one of the shapes has <2 elements
+            step_log_valid = False
+
+        return sup and not_waiting and no_hypotheses and step_log_valid
 
     def _save_dict(self):
-        save = super(self.__class__, self)._save_dict()
+        save = super(BayesianOptimisationOptimiser, self)._save_dict()
+
+        # hypothesised samples and wait_for_job are not needed to be saved since
+        # the optimiser should be quiescent
 
         # save GP models compressed and together since they contain a lot of
         # redundant information and are not human readable anyway.
@@ -1878,17 +2419,43 @@ class BayesianOptimisationOptimiser(Optimiser):
             step_log[n] = {k:v for k, v in s.items() if k != 'gp'}
             gps[n] = s['gp']
 
-        save['step_log'] = step_log
-        save['gps'] = base64.b64encode(zlib.compress(pickle.dumps(gps))).decode('utf-8')
+        # convert the step log (dict) to an array of tuples sorted by job_num
+        step_log_copy = [(k, v.copy()) for k, v in step_log.items()]
+        save['step_log'] = sorted(step_log_copy, key=lambda s: s[0])
+        for job_num, step in save['step_log']:
+            bs = step['best_sample']
+            step['best_sample'] = (bs.config, bs.cost, JSON_encode_binary(bs.extra))
+
+        save['gps'] = JSON_encode_binary(gps)
         return save
 
     def _load_dict(self, save):
-        super(self.__class__, self)._load_dict(save)
+        super(BayesianOptimisationOptimiser, self)._load_dict(save)
         self.step_log = save['step_log']
 
-        gps = pickle.loads(zlib.decompress(base64.b64decode(s['gp'])))
-        for n, s in self.step_log.items():
+        gps = JSON_decode_binary(save['gps'])
+
+        for n, s in self.step_log:
             s['gp'] = gps[n]
+            config, cost, extra = s['best_sample']
+            s['best_sample'] = Sample(dotdict(config), cost, JSON_decode_binary(extra))
+
+            # convert lists back to numpy arrays
+            for key in ['sx', 'sy', 'hx', 'hy', 'next_ac', 'argmax_acquisition']:
+                s[key] = np.array(s[key])
+            # ensure the shapes are correct
+            # sx,sy will never be empty since there will always be pre-samples
+            # hx,hy may be empty
+            if s['hx'].size == 0:
+                s['hx'] = np.empty(shape=(0, s['sx'].shape[1]))
+                s['hy'] = np.empty(shape=(0, 1))
+
+        # convert list of tuples to dictionary
+        self.step_log = dict(self.step_log)
+
+        # reset any progress attributes
+        self.wait_for_job = None
+        self.hypothesised_samples = []
 
 
 
@@ -1965,7 +2532,7 @@ class BayesianOptimisationOptimiser(Optimiser):
 
         # index of the best current real sample
         best_i = np.argmax(s.sy) if self.maximise_cost else np.argmin(s.sy)
-        ax1.plot(s.sx[best_i], s.sy[best_i], '*', markersize=15,
+        ax1.plot(sample_xs[best_i], s.sy[best_i], '*', markersize=15,
                  color='deepskyblue', zorder=10, label='best sample')
 
 
@@ -2034,6 +2601,34 @@ class BayesianOptimisationOptimiser(Optimiser):
         plt.show()
         return fig
 
+#TODO: move to gui library
+class LogMonitor:
+    '''
+    asynchronously monitor the log of the given loggable object and output it to
+    the given file.
+    return a flag which will stop the monitor when set
+    '''
+    def __init__(self, loggable, f):
+        '''
+        f: a filename or file object (eg open(..., 'w') or sys.stdout)
+        '''
+        self.stop_flag = threading.Event()
+        self.loggable = loggable
+        self.f = open(f, 'w') if isinstance(f, str) else f
+    def listen_async(self):
+        t = threading.Thread(target=self.listen, name='LogMonitor')
+        t.start()
+    def listen(self):
+        self.stop_flag.clear()
+        amount_written = 0
+        while not self.stop_flag.is_set():
+            length = len(self.loggable.log_record)
+            if length > amount_written:
+                more = self.loggable.log_record[amount_written:length]
+                self.f.write(more)
+                self.f.flush()
+                amount_written = length
+        self.f.close()
 
 def interactive(loggable, run_task, log_filename=None, poll_interval=0.5):
     '''
@@ -2059,7 +2654,7 @@ def interactive(loggable, run_task, log_filename=None, poll_interval=0.5):
         None to not write.
     poll_interval: time to sleep between checking if the log has been updated
     '''
-    thread = threading.Thread(target=run_task)
+    thread = threading.Thread(target=run_task, name='interactive')
     thread.start()
     f = None
     amount_printed = 0

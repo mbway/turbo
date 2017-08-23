@@ -165,6 +165,9 @@ class Data1D:
 
     def __init__(self, f):
         self.n = 2000 # num samples (including the samples which will be thrown out)
+        nfac = 1 # factor of n to _actually_ use (this is a hack because the
+                   # keep_ids are based on the assumption of 2000 samples)
+        self.n = self.n * nfac
 
         self.min_x = 0
         self.max_x = 12
@@ -173,8 +176,10 @@ class Data1D:
         self.s, self.full_exact_y = f(self.full_x)
 
         # remove some chunks
+        self.keep_ids = [(200,400), (750,1000), (1250,1450)]
+        self.keep_ids = [(int(a*nfac), int(b*nfac)) for a, b in self.keep_ids]
         def remove_chunks(arr):
-            return np.vstack([arr[200:400], arr[750:1000], arr[1250:1450]])
+            return np.vstack([arr[a:b] for a, b in self.keep_ids])
 
         self.x = remove_chunks(self.full_x)
         self.exact_y = remove_chunks(self.full_exact_y)
@@ -183,30 +188,24 @@ class Data1D:
         self.noise = make2D(np.random.normal(0, self.s, self.n))
         self.y = self.exact_y + self.noise
 
-        # populated as booleans
-        self.populated_b = [False] * len(self.full_x)
-        for i, x in enumerate(self.full_x):
-            for dx in self.x:
-                if isclose(x, dx, abs_tol=1e-1):
-                    self.populated_b[i] = True
-                    break
-        self.populated = np.array([1 if p else 0 for p in self.populated_b])
+        # 0.0 where no samples, 1.0 where there are
+        self.populated = np.zeros(len(self.full_x))
+        for a, b in self.keep_ids:
+            self.populated[a:b] = 1.0
 
+        print('training GP')
+        kernel = 1.0 * gp.kernels.Matern(length_scale=1) + gp.kernels.WhiteKernel(noise_level=0.3)
         gp_params = dict(
-            alpha = 0.13, # noise level
-            kernel = gp.kernels.RBF(length_scale=2.4),
-            n_restarts_optimizer = 2,
+            alpha = 1e-10, # noise level
+            kernel = kernel,
+            n_restarts_optimizer = 10,
             normalize_y = True
-        )
-        gp_params = dict(
-            alpha = 0.13, # noise level
-            kernel = gp.kernels.RBF(length_scale=13),
-            n_restarts_optimizer = 9,
         )
         gp_model = gp.GaussianProcessRegressor(**gp_params)
         gp_model.fit(self.x, self.y)
         self.gp_mus, self.gp_sigmas = gp_model.predict(self.full_x, return_std=True)
         self.gp_sigmas = make2D(self.gp_sigmas)
+        print('done')
 
         # Jeremy says this has no theoretical grounding :(
         '''
