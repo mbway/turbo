@@ -157,6 +157,10 @@ def make2D(arr):
         (np.atleast_2d behaves similarly but would give shape (1,l) instead)
     '''
     return arr.reshape(-1, 1)
+def make2D_row(arr):
+    ''' convert a numpy array with shape (l,) into an array with shape (1,l)
+    '''
+    return arr.reshape(1, -1)
 
 def logspace(from_, to, num_per_mag=1):
     '''
@@ -204,7 +208,7 @@ def config_string(config, order=None, precise=False):
     precise: True => truncate numbers to a certain length. False => display all precision
     '''
     assert order is None or set(order) == set(config.keys())
-    order = sorted(list(config.keys())) if order is None else order
+    order = sorted(config.keys()) if order is None else order
     if len(order) == 0:
         return '{}'
     else:
@@ -1778,9 +1782,9 @@ def range_type(range_):
             else:
                 return RangeType.Arbitrary
 
-def log_uniform(low, high):
+def log_uniform(low, high, size=None):
     ''' sample a random number in the interval [low, high] distributed logarithmically within that space '''
-    return np.exp(np.random.uniform(np.log(low), np.log(high)))
+    return np.exp(np.random.uniform(np.log(low), np.log(high), size=size))
 
 def close_to_any(x, xs, tol=1e-5):
     ''' whether the point x is close to any of the points in xs
@@ -1831,8 +1835,8 @@ class BayesianOptimisationOptimiser(Optimiser):
       Modifications to the algorithm may allow for discrete valued parameters however.
     '''
     def __init__(self, ranges, maximise_cost=False,
-                 acquisition_function='EI', acquisition_function_params=None,
-                 gp_params=None, pre_samples=4, ac_num_restarts=10,
+                 acquisition_function='UCB', acquisition_function_params=None,
+                 gp_params=None, pre_samples=4, ac_max_params=None,
                  close_tolerance=1e-5, allow_parallel=True):
         '''
         acquisition_function: the function to determine where to sample next
@@ -1845,9 +1849,19 @@ class BayesianOptimisationOptimiser(Optimiser):
             gaussian process regressor")
         pre_samples: the number of samples to be taken randomly before starting
             Bayesian optimisation
-        ac_num_restarts: number of restarts during the acquisition function
-            optimisation. Higher => more likely to find the optimum of the
-            acquisition function.
+        ac_max_params: parameters for maximising the acquisition function. None
+            to use default values, or a dictionary  with integer values for:
+                'num_random': number of random samples to take when maximising
+                    the acquisition function
+                'num_restarts': number of restarts to use for the gradient-based
+                    maximisation of the acquisition function
+                larger values for each of these parameters means that the
+                optimisation is more likely to find the global maximum of the
+                acquisition function, however the optimisation becomes more
+                costly (however this will probably be insignificant in
+                comparison to the time to evaluate a configuration).
+                0 may be passed for one of the two parameters to ignore that
+                step of the optimisation.
         close_tolerance: in some situations Bayesian optimisation may get stuck
             on local optima and will continue to sample points roughly in the
             same location. When this happens the GP can break (as input values
@@ -1866,7 +1880,14 @@ class BayesianOptimisationOptimiser(Optimiser):
         self.acquisition_function_params = ({} if acquisition_function_params is None
                                             else acquisition_function_params)
         ac_param_keys = set(self.acquisition_function_params.keys())
-        if acquisition_function == 'EI':
+
+        if acquisition_function == 'PI':
+            self.acquisition_function_name = 'PI'
+            self.acquisition_function = self.probability_of_improvement
+            # <= is subset. Not all params must be provided, but those given must be valid
+            assert ac_param_keys <= set(['xi']), 'invalid acquisition function parameters'
+
+        elif acquisition_function == 'EI':
             self.acquisition_function_name = 'EI'
             self.acquisition_function = self.expected_improvement
             # <= is subset. Not all params must be provided, but those given must be valid
@@ -1897,9 +1918,17 @@ class BayesianOptimisationOptimiser(Optimiser):
         else:
             self.gp_params = gp_params
 
+        if ac_max_params is None:
+            self.ac_max_params = dotdict({'num_random' : 10000, 'num_restarts' : 10})
+        else:
+            assert set(ac_max_params.keys()) <= set(['num_random', 'num_restarts'])
+            # convert each parameter to an integer
+            self.ac_max_params = dotdict({k:int(v) for k, v in ac_max_params.items()})
+            # at least one of the methods has to be used (non-zero)
+            assert self.ac_max_params.num_random > 0 or self.ac_max_params.num_restarts > 0
+
         assert pre_samples > 1, 'not enough pre-samples'
         self.pre_samples = pre_samples
-        self.ac_num_restarts = ac_num_restarts
         self.close_tolerance = close_tolerance
 
         self.params = sorted(self.ranges.keys())
@@ -1923,6 +1952,8 @@ class BayesianOptimisationOptimiser(Optimiser):
         # Only provide bounds for the parameters that are included in
         # self.config_to_point. Provide the log(lower), log(upper) bounds for
         # logarithmically spaced ranges.
+        # IMPORTANT: use range_bounds when dealing with configs and point_bounds
+        # when dealing with points
         self.point_bounds = []
         for param in self.params: # self.params is ordered
             type_ = self.range_types[param]
@@ -2009,20 +2040,40 @@ class BayesianOptimisationOptimiser(Optimiser):
         function even if it looks flat when plotted, and the 'maximum' sometimes
         rests there, and not at the obvious global maximum. This is fine.
         '''
+        # Maximise the acquisition function by random sampling
+        if self.ac_max_params.num_random > 0:
+            random_points = self._random_config_points(self.ac_max_params.num_random)
+            random_ac = self.acquisition_function(random_points, gp_model,
+                            self.maximise_cost, best_cost, **self.acquisition_function_params)
+            best_random_i = random_ac.argmax()
+
+            # keep track of the current best
+            best_next_x = make2D_row(random_points[best_random_i])
+            best_neg_ac = -random_ac[best_random_i] # negative acquisition function value for best_next_x
+        else:
+            best_next_x = None
+            best_neg_ac = inf
+
+        # Maximise the acquisition function by minimising the negative acquisition function
+
         # scipy has no maximise function, so instead minimise the negation of the acquisition function
         # reshape(1,-1) => 1 sample (row) with N attributes (cols). Needed because x is passed as shape (N,)
         # unpacking the params dict is harmless if the dict is empty
         neg_acquisition_function = lambda x: -self.acquisition_function(
-            x.reshape(1, -1), gp_model, self.maximise_cost, best_cost,
+            make2D_row(x), gp_model, self.maximise_cost, best_cost,
             **self.acquisition_function_params)
 
-        # minimise the negative acquisition function
-        best_next_x = None
-        best_neg_ac = inf # negative acquisition function value for best_next_x
-        for j in range(self.ac_num_restarts):
-            # this random configuration can be anywhere, it doesn't matter if it
-            # is close to an existing sample.
-            starting_point = self.config_to_point(self._random_config())
+        if self.ac_max_params.num_restarts > 0:
+            # it doesn't matter if these points are close to any existing samples
+            starting_points = self._random_config_points(self.ac_max_params.num_restarts)
+            if self.ac_max_params.num_random > 0:
+                # see if gradient-based optimisation can improve upon the best
+                # randomly chosen sample.
+                starting_points = np.vstack([best_next_x, starting_points])
+
+        # num_restarts may be 0 in which case this step is skipped
+        for j in range(starting_points.shape[0]):
+            starting_point = make2D_row(starting_points[j])
 
             # result is an OptimizeResult object
             # if something goes wrong, scikit will write a warning to stderr by
@@ -2040,24 +2091,28 @@ class BayesianOptimisationOptimiser(Optimiser):
                         self._log('warning when maximising the acquisition function: {}'.format(warn))
             if not result.success:
                 self._log('restart {}/{} of negative acquisition minimisation failed'.format(
-                    j, self.ac_num_restarts))
+                    j, starting_points.shape[0]))
                 continue
 
             # result.fun == negative acquisition function evaluated at result.x
             if result.fun < best_neg_ac:
-                best_next_x = result.x
-                best_neg_ac = result.fun
+                best_next_x = result.x # shape=(num_attribs,)
+                best_neg_ac = result.fun # shape=(1,1)
 
         # acquisition function optimisation finished:
         # best_next_x = argmax(acquisition_function)
 
         if best_next_x is None:
-            self._log('all the restarts of the maximisation failed')
+            self._log('all attempts at acquisition function maximisation failed')
             return None, 0
         else:
             # reshape to make shape=(1,num_attribs) and negate best_neg_ac to make
             # it the positive acquisition function value
-            return best_next_x.reshape(1, -1), -best_neg_ac
+            best_next_x = make2D_row(best_next_x)
+            # ensure that the chosen value lies within the bounds (which may not
+            # be the case due to floating point error)
+            best_next_x = np.clip(best_next_x, [lo for lo, hi in self.point_bounds], [hi for lo, hi in self.point_bounds])
+            return best_next_x, -np.asscalar(best_neg_ac)
 
     def _bayes_step(self, job_num):
         '''
@@ -2188,6 +2243,24 @@ class BayesianOptimisationOptimiser(Optimiser):
 
 
     @staticmethod
+    def probability_of_improvement(xs, gp_model, maximise_cost, best_cost, xi=0.01):
+        r'''
+        This acquisition function is similar to EI
+        $$PI(\mathbf x)\quad=\quad\mathrm P\Big(f(\mathbf x)\ge f(\mathbf x^+)+\xi\Big)\quad=\quad\Phi\left(\frac{\mu(\mathbf x)-f(\mathbf x^+)-\xi}{\sigma(\mathbf x)}\right)$$
+        '''
+        mus, sigmas = gp_model.predict(xs, return_std=True)
+        sigmas = make2D(sigmas)
+
+        sf = 1 if maximise_cost else -1   # scaling factor
+        diff = sf * (mus - best_cost - xi)  # mu(x) - f(x+) - xi
+
+        with np.errstate(divide='ignore'):
+            Zs = diff / sigmas # produces Zs[i]=inf for all i where sigmas[i]=0.0
+        Zs[sigmas == 0.0] = 0.0 # replace the infs with 0s
+
+        return norm.cdf(Zs)
+
+    @staticmethod
     def expected_improvement(xs, gp_model, maximise_cost, best_cost, xi=0.01):
         r''' expected improvement acquisition function
         xs: array of points to evaluate the GP at. shape=(num_points, num_attribs)
@@ -2245,9 +2318,17 @@ class BayesianOptimisationOptimiser(Optimiser):
 
         return EIs
 
+    #TODO: should rename? make CB/UCB/LCB all refer to this function
+    #TODO: provide formulae
     @staticmethod
     def upper_confidence_bound(xs, gp_model, maximise_cost, best_cost, kappa=1.0):
-        '''
+        r'''
+        upper confidence bound when maximising, lower confidence bound when minimising
+        $$\begin{align*}
+        UCB(\mathbf x)&=\mu(\mathbf x)+\kappa\sigma(\mathbf x)\\
+        LCB(\mathbf x)&=\mu(\mathbf x)-\kappa\sigma(\mathbf x)
+        \end{align*}$$
+
         xs: array of points to evaluate the GP at. shape=(num_points, num_attribs)
         gp_model: the GP fitted to the past configurations
         maximise_cost: True => higher cost is better, False => lower cost is better
@@ -2294,6 +2375,7 @@ class BayesianOptimisationOptimiser(Optimiser):
 
             elif type_ == RangeType.Logarithmic:
                 low, high = self.range_bounds[param]
+                # not exponent, but a value in the original space
                 config[param] = log_uniform(low, high)
 
             elif type_ == RangeType.Constant:
@@ -2303,6 +2385,27 @@ class BayesianOptimisationOptimiser(Optimiser):
                 raise ValueError('invalid range type: {}'.format(type_))
 
         return dotdict(config)
+
+    def _random_config_points(self, num_points):
+        '''
+        generate an array of vertically stacked configuration points equivalent to self.config_to_point(self._random_config())
+        num_points: number of points to generate (height of output)
+        returns: numpy array with shape=(num_points,num_attribs)
+        '''
+        cols = [] # generate points column/parameter-wise
+        for param in self.params: # self.params is sorted
+            type_ = self.range_types[param]
+            low, high = self.range_bounds[param]
+
+            if type_ == RangeType.Linear:
+                cols.append(np.random.uniform(low, high, size=(num_points, 1)))
+            elif type_ == RangeType.Logarithmic:
+                # note: NOT log_uniform because that computes a value in the
+                # original space but distributed logarithmically. We are looking
+                # for just the exponent here, not the value.
+                cols.append(np.random.uniform(np.log(low), np.log(high), size=(num_points, 1)))
+        return np.hstack(cols)
+
 
     def config_to_point(self, config):
         '''
@@ -2314,7 +2417,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         corresponds to a value of e^n as a configuration.
 
         config: a dictionary of parameter names to values
-        returns: numpy array with shape=(1,num_attribs)
+        returns: numpy array with shape=(1,number of linear or logarithmic parameters)
         '''
         assert set(config.keys()) == set(self.ranges.keys())
         elements = []
@@ -2473,7 +2576,7 @@ class BayesianOptimisationOptimiser(Optimiser):
 
         param: the name of the parameter to perturb to obtain the graph
         bayes_step: the job ID to plot (must be in self.step_log)
-        true_cost: true cost function corresponding to self.ranges[param] (None to omit)
+        true_cost: true cost function (or array of pre-computed cost values corresponding to self.ranges[param]) (None to omit)
         log_ac: whether to display the negative log acquisition function instead
         n_sigma: the number of standard deviations from the mean to plot the
             uncertainty confidence inerval.
@@ -2516,10 +2619,12 @@ class BayesianOptimisationOptimiser(Optimiser):
         ax1.set_title('Surrogate objective function')
 
         if true_cost is not None:
-            ax1.plot(all_xs, true_cost, 'k--', label='true cost')
+            # true cost is either the cost function, or pre-computed costs as an array
+            ys = true_cost(all_xs) if callable(true_cost) else true_cost
+            ax1.plot(all_xs, ys, 'k--', label='true cost')
 
         # get the value for the parameter 'param' from the given point
-        param_from_point = lambda p: self.point_to_config(p.reshape(1, -1))[param]
+        param_from_point = lambda p: self.point_to_config(make2D_row(p))[param]
         # plot samples projected onto the `param` axis
         # reshape needed because using x in sx reduces each row to a 1D array
         sample_xs = [param_from_point(x) for x in s.sx]
