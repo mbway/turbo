@@ -38,6 +38,7 @@ from itertools import groupby
 
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 
 # for Bayesian Optimisation
 import sklearn.gaussian_process as gp
@@ -2491,7 +2492,7 @@ class BayesianOptimisationOptimiser(Optimiser):
                 all(all([
                     is_2d(step['sx']), is_2d(step['sy']),
                     is_2d(step['hx']), is_2d(step['hy']),
-                    is_2d(step['next_ac']), is_2d(step['argmax_acquisition']),
+                    np.isscalar(step['next_ac']), is_2d(step['argmax_acquisition']),
 
                     eq_rows(step['sx'], step['sy']),
                     eq_rows(step['hx'], step['hy']),
@@ -2544,7 +2545,7 @@ class BayesianOptimisationOptimiser(Optimiser):
             s['best_sample'] = Sample(dotdict(config), cost, JSON_decode_binary(extra))
 
             # convert lists back to numpy arrays
-            for key in ['sx', 'sy', 'hx', 'hy', 'next_ac', 'argmax_acquisition']:
+            for key in ['sx', 'sy', 'hx', 'hy', 'argmax_acquisition']:
                 s[key] = np.array(s[key])
             # ensure the shapes are correct
             # sx,sy will never be empty since there will always be pre-samples
@@ -2602,7 +2603,10 @@ class BayesianOptimisationOptimiser(Optimiser):
         #gp_model = gp.GaussianProcessRegressor(**self.gp_params)
         #gp_model.fit(xs, ys)
 
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 10))
+        fig = plt.figure(figsize=(16, 10)) # inches
+        grid = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=[2, 1])
+        ax1, ax2 = fig.add_subplot(grid[0]), fig.add_subplot(grid[1])
+
         fig.suptitle('Bayesian Optimisation step {}{}'.format(
             step-self.pre_samples,
             (' (chosen at random)' if s.chosen_at_random else '')), fontsize=14)
@@ -2611,9 +2615,8 @@ class BayesianOptimisationOptimiser(Optimiser):
         if is_log:
             ax1.set_xscale('log')
             ax2.set_xscale('log')
-        plt.subplots_adjust(hspace=0.3)
+        fig.subplots_adjust(hspace=0.3)
 
-        #plt.subplot(2, 1, 1) # nrows, ncols, plot_number
         #ax1.set_xlabel('parameter: ' + param) # don't need both plots to display the axis
         ax1.set_ylabel('cost')
         ax1.set_title('Surrogate objective function')
@@ -2666,7 +2669,6 @@ class BayesianOptimisationOptimiser(Optimiser):
 
         ax1.legend()
 
-        #plt.subplot(2, 1, 2) # nrows, ncols, plot_number
         ax2.set_xlabel('parameter {}'.format(param))
         ax2.set_ylabel(self.acquisition_function_name)
         ax2.set_title('acquisition function')
@@ -2703,8 +2705,7 @@ class BayesianOptimisationOptimiser(Optimiser):
 
         ax2.legend()
 
-        plt.show()
-        return fig
+        return fig, ax1, ax2
 
 #TODO: move to gui library
 class LogMonitor:

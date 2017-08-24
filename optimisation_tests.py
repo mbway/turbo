@@ -41,9 +41,11 @@ import time
 import numpy as np
 import random
 import threading
+import statistics
 import psutil
 import copy
 import re
+from scipy.stats import uniform
 
 # local modules
 import optimisation as op
@@ -261,6 +263,80 @@ class TestUtils(NumpyCompatableTestCase):
         self.assertFalse(op.is_numeric(np.array([[1]])))
         self.assertFalse(op.is_numeric('1'))
         self.assertFalse(op.is_numeric('1.0'))
+
+    def test_random_config_points(self):
+        '''
+        test that randomly chosen configurations (through the various methods)
+        are distributed correctly (according to the range types).
+
+        note: when dealing with _configs_, the values for a logarithmically
+        distributed parameter should span from min to max but be distributed
+        logarithmically, that is, more samples closer to min. However when
+        dealing with _points_, the values should be uniformly distributed over
+        the range log(min) to log(max)
+        '''
+        amin, amax = -10, -5
+        cmin, cmax = 10, 10000
+        # uniform between loc and loc+scale
+        a_dist = uniform(loc=amin, scale=amax-amin)
+        c_point_dist = uniform(loc=np.log(cmin), scale=np.log(cmax)-np.log(cmin))
+        b = 4
+        ranges = {'a':np.linspace(amin, amax), 'b':[b], 'c':op.logspace(cmin, cmax)}
+        opt = op.BayesianOptimisationOptimiser(ranges)
+
+        num_points = 100000
+        random_cfgs = [opt._random_config() for _ in range(num_points)]
+        random_points = opt._random_config_points(num_points)
+        self.assertEqual(random_points.shape, (num_points, 2)) # exclude b constant parameter
+
+        # make sure that each parameter has a legal value (in range)
+        for c in random_cfgs:
+            self.assertTrue(amin <= c.a <= amax)
+            self.assertEqual(c.b, b)
+            self.assertTrue(cmin <= c.c <= cmax)
+        for row in random_points:
+            self.assertTrue(amin <= row[0] <= amax)
+            # note: the values for the points should be
+            self.assertTrue(np.log(cmin) <= row[1] <= np.log(cmax))
+
+        # make sure that converting between points and configurations works correctly
+        converted = [opt.point_to_config(opt.config_to_point(c)) for c in random_cfgs]
+        self.assertEqual(random_cfgs, converted)
+
+        # make sure that the mean values of each parameter is similar
+        def check(samples, mu, sigma, tol=0.01):
+            print('mean[sample: {}, true: {}]'.format(statistics.mean(samples), mu))
+            print('stddev[sample: {}, true: {}]'.format(statistics.stdev(samples), sigma))
+            self.assertTrue(abs(statistics.mean(samples)-mu) <= tol)
+            self.assertTrue(abs(statistics.stdev(samples)-sigma) <= tol)
+
+        check([c.a for c in random_cfgs], a_dist.mean(), a_dist.std())
+        check([row[0] for row in random_points], a_dist.mean(), a_dist.std())
+        check([opt.point_to_config(op.make2D_row(row)).a for row in random_points], a_dist.mean(), a_dist.std())
+
+        r'''
+        Take a continuous random variable $X$ and define $Y=g(X)$ for some 1-1 mapping: $y$. For the case of log-uniform: $X\sim\mathcal U(\log b, \log a)$ and $g(x)=e^x$ so $g^{-1}(y)=\log y$.
+
+        to transform a pdf:
+        $f_Y(y)=f_X(g^{-1}(y))\left|\frac{\mathrm d}{\mathrm dy}g^{-1}(y)\right|$
+
+        for the log-uniform case: $f_Y(y)=\frac{1}{\log b-\log a}\left|\frac{1}{y}\right|$
+
+        so $E[Y]=\int_a^b y f_Y(y)\;\mathrm d y=\int_a^b y \frac{1}{\log b-\log a}\left|\frac{1}{y}\right|\;\mathrm d y=\frac{1}{\log b-\log a}\int_a^b \frac{y}{y}\;\mathrm d y=\frac{b-a}{\log b-\log a}$
+        treat $y$ as always positive to make integrating $|1/y|$ simple.
+
+        $E[Y^2]=\frac{b^2-a^2}{2(\log b-\log a)}$
+
+        which makes the variance easy to find: $Var[Y]=E[Y^2]-E[Y]^2$
+        '''
+        a, b, la, lb = cmin, cmax, np.log(cmin), np.log(cmax)
+        c_mu = (b-a)/(lb-la)
+        c_E_xsq = (b**2-a**2)/(2*(lb-la))
+        c_stddev = np.sqrt(c_E_xsq - c_mu)
+        check([c.c for c in random_cfgs], c_mu, c_stddev, tol=0.05*cmax)
+        check([row[1] for row in random_points], c_point_dist.mean(), c_point_dist.std())
+        check([opt.point_to_config(op.make2D_row(row)).c for row in random_points], c_mu, c_stddev, tol=0.05*cmax)
+
 
 class TestOptimiser(NumpyCompatableTestCase):
     def test_simple_grid(self):

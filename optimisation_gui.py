@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 '''
 GUI utilities to be used with the optimisation module.
+Qt GUIs as well as Jupyter/IPython and console interaction utilities
 '''
 from __future__ import print_function
-
 
 import sys
 if sys.version_info[0] == 3: # python 3
@@ -18,13 +18,28 @@ elif sys.version_info[0] == 2: # python 2
 else:
     print('unsupported python version')
 
-
-import sys
 import signal
 import threading
+import io
 
+from IPython.display import clear_output, display, Image, HTML
+import ipywidgets as widgets
+
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns # prettify matplotlib
+
+
+# Local imports
 import optimisation as op
 
+def is_ipython():
+    ''' whether the current script is running in IPython/Jupyter '''
+    try:
+        __IPYTHON__
+    except NameError:
+        return False
+    return True
 
 class BetterQThread(qtc.QThread):
     '''
@@ -453,6 +468,66 @@ class DebugGUIs(qtc.QObject):
         print('waiting for GUIs to manually close', flush=True)
         self.app_thread.join()
 
+
+
+def step_log_slider(optimiser, function, pre_compute=False):
+    '''
+    A utility function for easily using a slider to select a step from the optimiser's step log
+    function: a function which takes the step number and step as arguments and returns a figure
+        (if None is returned and then the last matplotlib figure is displayed)
+    pre_compute: whether to plot each figure once at the start to make scrubbing
+        faster. If pre_compute is False then this function will still memoise (store
+        images when they are requested for the first time)
+    '''
+    # step numbers, may not be contiguous  or in order
+    step_nums = sorted(optimiser.step_log.keys())
+
+    # dictionary of step number to image of the figure for that step
+    saved = {}
+    def save_fig(s, fig):
+        img = io.BytesIO()
+        # default dpi is 72
+        fig.savefig(img, format='png', bbox_inches='tight')
+        saved[s] = Image(data=img.getvalue(), format='png', width='100%')
+
+    def show_step(s):
+        if s not in saved.keys():
+            # if function returns None then use the current figure
+            fig = function(s, optimiser.step_log[s]) or plt.gcf()
+            save_fig(s, fig) # memoise
+            plt.close(fig) # free resources
+        display(saved[s])
+
+    if pre_compute:
+        # plot each step (displaying the output) and save each figure
+        for s in step_nums:
+            clear_output(wait=True)
+            show_step(s)
+        clear_output()
+
+    list_slider(step_nums, show_step, slider_name='Step N: ')
+
+def list_slider(list_, function, slider_name='Item N: '):
+    '''
+    A utility for easily setting up a Jupyter slider for items of a list
+    list_: a list of items for the slider value to correspond to
+    function: a function which takes an item of list_ as an argument
+    slider_name: the description/label to apply to the slider
+    '''
+    slider = widgets.IntSlider(value=len(list_), min=1, max=len(list_),
+                               continuous_update=False, width='100%')
+    slider.description = slider_name
+    widgets.interact(lambda val: function(list_[val-1]), val=slider)
+
+
+def Jupyter_setup():
+    print('setting up GUI for Jupyter')
+    # hide scroll bars that sometimes appear (by chance) because the image fills
+    # the entire sub-area
+    display(HTML('''<style>div.output_subarea.output_png{overflow:hidden;}</style>'''))
+
+if is_ipython():
+    Jupyter_setup()
 
 
 def main():
