@@ -469,7 +469,6 @@ class DebugGUIs(qtc.QObject):
         self.app_thread.join()
 
 
-
 def step_log_slider(optimiser, function, pre_compute=False):
     '''
     A utility function for easily using a slider to select a step from the optimiser's step log
@@ -505,7 +504,7 @@ def step_log_slider(optimiser, function, pre_compute=False):
             show_step(s)
         clear_output()
 
-    list_slider(step_nums, show_step, slider_name='Step N: ')
+    return list_slider(step_nums, show_step, slider_name='Step N: ')
 
 def list_slider(list_, function, slider_name='Item N: '):
     '''
@@ -518,6 +517,7 @@ def list_slider(list_, function, slider_name='Item N: '):
                                continuous_update=False, width='100%')
     slider.description = slider_name
     widgets.interact(lambda val: function(list_[val-1]), val=slider)
+    return slider
 
 
 def Jupyter_setup():
