@@ -107,15 +107,11 @@ def finish_off_evaluators(timeout=0.4):
     def should_stop():
         return time.time() - start_time > timeout
     def handle_request(msg):
-        if msg['type'] == 'job_request':
-            return None
-        elif msg['type'] == 'job_results':
-            return {'type' : 'ACK'}
+        return op_net.empty_msg()
     def on_success(request, response):
         pass
-    op_net.request_response_server(
-        (op.DEFAULT_HOST, op.DEFAULT_PORT),
-        0.1, handle_request, should_stop, on_success)
+    op_net.message_server((op.DEFAULT_HOST, op.DEFAULT_PORT), 0.1,
+                          should_stop, handle_request, on_success)
 
 
 class NumpyCompatableTestCase(unittest.TestCase):
@@ -314,6 +310,7 @@ class TestUtils(NumpyCompatableTestCase):
         self.assertFalse(op.is_numeric('1'))
         self.assertFalse(op.is_numeric('1.0'))
 
+    @unittest.skipIf(NO_SLOW_TESTS, 'slow test')
     def test_random_config_points(self):
         '''
         test that randomly chosen configurations (through the various methods)
@@ -1149,7 +1146,12 @@ class TestCheckpoints(NumpyCompatableTestCase):
             # it does not stop processing.
             cm.take_checkpoint(save_now=False, make_copy=False, compare_after_load=False)
             print_dot()
-            time.sleep(0.1)
+            if len(cm.saved) > 100:
+                time.sleep(1.0)
+            elif len(cm.saved) > 50:
+                time.sleep(0.5)
+            else:
+                time.sleep(0.1)
             #for e in evaluators:
                 #no_exceptions(self, e)
 

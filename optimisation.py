@@ -55,11 +55,8 @@ DEFAULT_PORT = 9187
 
 CLIENT_TIMEOUT = 1.0 # seconds for the client to wait for a connection before retrying
 SERVER_TIMEOUT = 1.0 # seconds for the server to wait for a connection before retrying
-#TODO: make sure there is something logged on a last resort timeout
-# This is to prevent deadlock but if a socket times out then it may be fatal. At
-# least this way the problem is visible and you can restore from a checkpoint
-# rather than have it sit in deadlock forever.
 NON_CRITICAL_WAIT = 1.0 # seconds to wait after a non-critical network error before retrying
+
 
 def ON_EXCEPTION(e):
     '''
@@ -353,45 +350,46 @@ class Evaluator(object):
 
         def should_stop():
             return self.wants_to_stop() or num_jobs >= max_jobs
-        never_stop = lambda: False
 
-        def request_response(should_stop, request):
-            ''' both responses share a lot of arguments in common '''
-            return op_net.request_response_client(
-                (host, port), timeout, should_stop, request,
-                error_wait=NON_CRITICAL_WAIT, JSON_encoder=NumpyJSONEncoder)
+        def on_error(e):
+            time.sleep(NON_CRITICAL_WAIT)
+
+        def message_client(request, should_stop):
+            ''' most of the arguments are the same '''
+            return op_net.message_client((host, port), timeout, request,
+                                         should_stop, on_error)
+
 
         try:
             while not should_stop():
+                ### Request a job
                 self.log('requesting job from {}:{}'.format(host, port))
-                job_request = {'type' : 'job_request'}
-                job = request_response(should_stop, job_request)
-                self.log('received job: {}'.format(job))
-                # stopped attempting to connect because should_stop became True
-                if job == 'should_stop':
+                job_request = op_net.encode_JSON({'type' : 'job_request'})
+                job = message_client(job_request, should_stop)
+                if job == None:
+                    # stopped attempting to connect because should_stop became True
                     break
-                elif job is None:
+                elif job == op_net.empty_msg():
                     self.log('no job available')
                     time.sleep(NON_CRITICAL_WAIT) # not an error, but wait a while
                     continue
 
+                job = op_net.decode_JSON(job)
+                self.log('received job: {}'.format(job))
+
                 assert set(job.keys()) == set(['config', 'num', 'setup_duration']), \
                         'malformed job request: {}'.format(job)
 
+                ### Evaluate the job
                 results_msg = self._evaluate_job(job)
 
-                # keep sending results back until acknowledgement is received.
-                # The optimiser will discard the duplicates
-                while True:
-                    # don't ever stop trying to connect even if
-                    # self.wants_to_stop() because after a job is requested,
-                    # the client must return the results
-                    ack = request_response(never_stop, results_msg)
-                    assert ack != 'should_stop'
+                ### Return the results
+                # don't ever stop trying to connect even if self.wants_to_stop()
+                # because after a job is requested, the client must return the
+                # results
+                ack = message_client(results_msg, op_net.never_stop)
+                assert ack is not None and ack == op_net.empty_msg()
 
-                    # acknowledgement received
-                    if ack['type'] == 'ACK':
-                        break
                 num_jobs += 1
                 self.log('results sent successfully')
 
@@ -420,16 +418,17 @@ class Evaluator(object):
 
 
         self.log('returning results: {}'.format(
-            [(config, cost, list(extra.keys())) for config, cost, extra in samples]))
+            [(config, cost, list(extra.keys()))
+                for config, cost, extra in samples]))
 
         job['evaluation_duration'] = time.time()-start_time # add this field
-        msg_dict = {
-            'type' : 'job_results',
-            'job' : job,
+        results_msg = {
+            'type'    : 'job_results',
+            'job'     : job,
             'samples' : samples
         }
-        #TODO: is samples double nested [[(), ()]] because it looks like it in wireshark
-        return msg_dict
+        results_msg = op_net.encode_JSON(results_msg, encoder=NumpyJSONEncoder)
+        return results_msg
 
 
     def stop(self):
@@ -633,9 +632,19 @@ class Optimiser(object):
     def _handle_client(self, msg, state):
         '''
         handle a single interaction with a client
-        msg: assumed not to be None
+        msg: the message from the client. Assumed not to be None or empty.
+        state: the optimiser run_state
+        return: the data for the reply message to the client
         '''
         assert 'type' in msg.keys(), 'malformed request: {}'.format(msg)
+
+        def job_msg(job):
+            job_dict = {
+                'config' : job.config,
+                'num' : job.num,
+                'setup_duration' : job.setup_duration
+            }
+            return op_net.encode_JSON(job_dict, encoder=NumpyJSONEncoder)
 
         if msg['type'] == 'job_request':
             # allowed to re-send the failed job even if generating new ones is
@@ -643,42 +652,33 @@ class Optimiser(object):
             if state.requested_job is not None:
                 # re-send the last requested job because the last request did not succeed
                 self._log('re-sending the last job since there was an error')
-                job_dict = {
-                    'config' : state.requested_job.config,
-                    'num' : state.requested_job.num,
-                    'setup_duration' : state.requested_job.setup_duration
-                }
-                return job_dict
+                return job_msg(state.requested_job)
+
             elif self._wants_to_stop(state):
                 self._log('not allowing new jobs (stopping)')
-                return None # send empty
+                return op_net.empty_msg()
+
             elif self._checkpoint_flag.is_set():
                 self._log('not allowing new jobs (taking checkpoint)')
-                return None # send empty
+                return op_net.empty_msg()
+
             elif not self._ready_for_next_configuration():
                 self._log('not allowing new jobs (not ready)')
-                return None # send empty
+                return op_net.empty_msg()
+
             else:
                 job = self._next_job()
                 # store in-case it has to be re-sent
                 state.requested_job = job
                 if job is None:
                     state.out_of_configs = True
-                    return None # send empty to signal no more jobs available
+                    return op_net.empty_msg() # send empty to signal no more jobs available
                 else:
                     state.started_job_ids.add(job.num)
                     state.started_this_run += 1
-                    job_dict = {
-                        'config' : job.config,
-                        'num' : job.num,
-                        'setup_duration' : job.setup_duration
-                    }
-                    return job_dict
+                    return job_msg(job)
 
         elif msg['type'] == 'job_results':
-            assert set(msg.keys()) == set(['type', 'job', 'samples']), 'malformed message: {}'.format(msg)
-            job_keys = set(['config', 'num', 'setup_duration', 'evaluation_duration'])
-            assert set(msg['job'].keys()) == job_keys, 'malformed job message: {}'.format(msg['job'])
 
             if msg['job']['num'] not in state.started_job_ids:
                 self._log('Non-critical error: received results from a job that was not started this run: {}'.format(msg))
@@ -693,9 +693,15 @@ class Optimiser(object):
                 job = Job(**msg['job'])
                 self._process_job_results(job, results)
                 state.finished_this_run += 1
+
+                # if the results are for the job that the optimiser wasn't sure
+                # whether the evaluator received successfully, then evidently it did.
+                if state.requested_job is not None and job.num == state.requested_job.num:
+                    state.requested_job = None
+
             # send acknowledgement that the results were received and not
             # malformed (even if they were duplicates and were discarded)
-            return {'type' : 'ACK'}
+            return op_net.empty_msg()
 
         else:
             raise Exception('invalid request: {}'.format(msg))
@@ -762,20 +768,20 @@ class Optimiser(object):
             return self._wants_to_stop(state) and can_stop
 
         def handle_request(request):
+            request = op_net.decode_JSON(request)
             return self._handle_client(request, state)
 
         def on_success(request, response):
             # update the timer
             self.duration = state.old_duration + state.run_time()
+            request = op_net.decode_JSON(request)
             if request['type'] == 'job_request':
                 # the interaction that succeeded was a job request
                 state.requested_job = None # job reached evaluator
 
         try:
-            op_net.request_response_server(
-                (host, port), timeout, handle_request, should_stop, on_success,
-                JSON_encoder=NumpyJSONEncoder
-            )
+            op_net.message_server((host, port), timeout,
+                                  should_stop, handle_request, on_success)
         except Exception as e:
             self._log('Exception raised during run:\n{}'.format(exception_string()))
             state.exception_caught = True
@@ -1913,7 +1919,6 @@ class BayesianOptimisationOptimiser(Optimiser):
         return EIs
 
     #TODO: should rename? make CB/UCB/LCB all refer to this function
-    #TODO: provide formulae
     @staticmethod
     def upper_confidence_bound(xs, gp_model, maximise_cost, best_cost, kappa=1.0):
         r'''
