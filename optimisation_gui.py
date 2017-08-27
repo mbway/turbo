@@ -376,6 +376,100 @@ class OptimiserGUI(LoggableGUI):
 
 
 
+class LogMonitor:
+    '''
+    asynchronously monitor the log of the given loggable object and output it to
+    the given file.
+    return a flag which will stop the monitor when set
+    '''
+    counter = 0
+    def __init__(self, loggable, f):
+        '''
+        f: a filename or file object (eg open(..., 'w') or sys.stdout)
+        '''
+        self.stop_flag = threading.Event()
+        self.loggable = loggable
+        if LogMonitor.counter > 0:
+            f += str(LogMonitor.counter)
+        self.f = open(f, 'w') if isinstance(f, str) else f
+        LogMonitor.counter += 1
+    def listen_async(self):
+        t = threading.Thread(target=self.listen, name='LogMonitor')
+        # don't wait the threads to finish, just kill it when the program exits
+        t.setDaemon(True)
+        t.start()
+    def listen(self):
+        self.stop_flag.clear()
+        amount_written = 0
+        while not self.stop_flag.is_set():
+            length = len(self.loggable.log_record)
+            if length > amount_written:
+                more = self.loggable.log_record[amount_written:length]
+                self.f.write(more)
+                self.f.flush()
+                amount_written = length
+        self.f.close()
+
+def interactive(loggable, run_task, log_filename=None, poll_interval=0.5):
+    '''
+    run a task related to a loggable object (eg Optimiser server or Evaluator
+    client) in the background while printing its output, catching any
+    KeyboardInterrupts and shutting down the loggable object gracefully when one
+    occurs.
+
+    Evaluator example:
+    >>> evaluator = MyEvaluator()
+    >>> task = lambda: evaluator.run_client(host, port)
+    >>> op.interactive(evaluator, task, '/tmp/evaluator.log')
+
+    Optimiser example
+    >>> optimiser = op.GridSearchOptimiser(ranges)
+    >>> task = lambda: optimiser.run_server(host, port, max_jobs=20)
+    >>> op.interactive(optimiser, task, '/tmp/optimiser.log')
+
+    loggable: an object with a log_record attribute and stop() method
+    run_task: a function to run (related to the loggable object),
+        eg lambda: optimiser.run_sequential(my_evaluator)
+    log_filename: filename to write the log to (recommend somewhere in /tmp/) or
+        None to not write.
+    poll_interval: time to sleep between checking if the log has been updated
+    '''
+    thread = threading.Thread(target=run_task, name='interactive')
+    thread.start()
+    f = None
+    amount_printed = 0
+
+    def print_more():
+        ''' print everything that has been added to the log since amount_printed '''
+        length = len(loggable.log_record)
+        if length > amount_printed:
+            more = loggable.log_record[amount_printed:length]
+            print(more, end='')
+            if f is not None:
+                f.write(more)
+                f.flush()
+        return length
+
+    try:
+        f = open(log_filename, 'w') if log_filename is not None else None
+        try:
+            while thread.is_alive():
+                amount_printed = print_more()
+                time.sleep(poll_interval)
+        except KeyboardInterrupt:
+            print('-- KeyboardInterrupt caught, stopping gracefully --')
+            loggable.stop()
+            thread.join()
+
+        # finish off anything left not printed
+        print_more()
+        print('-- interactive task finished -- ')
+    finally:
+        if f is not None:
+            f.close()
+
+
+
 
 class DebugGUIs(qtc.QObject):
     '''

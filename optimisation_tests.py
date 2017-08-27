@@ -17,8 +17,8 @@ for debugging the following tools are useful:
 
 - can insert the following code to mirror the logs to files:
 ```
-op.LogMonitor(optimiser, '/tmp/optimiser.log').listen_async()
-op.LogMonitor(evaluator, '/tmp/evaluator.log').listen_async()
+op_gui.LogMonitor(optimiser, '/tmp/optimiser.log').listen_async()
+op_gui.LogMonitor(evaluator, '/tmp/evaluator.log').listen_async()
 ```
 
 - can use `killall -SIGUSR1 python3` to signal to this process to break into pdb at any time
@@ -1122,13 +1122,6 @@ class TestCheckpoints(NumpyCompatableTestCase):
         e_threads = [threading.Thread(target=e.run_client, name='evaluator{}'.format(i)) for i,e in enumerate(evaluators)]
         for t in e_threads:
             t.start()
-
-        #NOTE: interferes with no_open_files()
-        '''
-        for i in range(len(evaluators)):
-            op.LogMonitor(evaluators[i], '/tmp/evaluator_{}'.format(i)).listen_async()
-        op.LogMonitor(optimiser, '/tmp/optimiser').listen_async()
-        '''
 
         # optimiser only runs for specified number of jobs
 
