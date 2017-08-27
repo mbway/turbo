@@ -15,11 +15,17 @@ Notes:
 
 for debugging the following tools are useful:
 
-can use `killall -SIGUSR1 python3` to signal to this process to break into pdb at any time
+- can insert the following code to mirror the logs to files:
+```
+op.LogMonitor(optimiser, '/tmp/optimiser.log').listen_async()
+op.LogMonitor(evaluator, '/tmp/evaluator.log').listen_async()
+```
 
-can use `less /tmp/frames.txt` to monitor the stack frames of every running thread, updated every second
+- can use `killall -SIGUSR1 python3` to signal to this process to break into pdb at any time
 
-can use the following GUI library to monitor optimisers and evaluators as tests run
+- can use `less /tmp/frames.txt` to monitor the stack frames of every running thread, updated every second
+
+- can use the following GUI library to monitor optimisers and evaluators as tests run
 ```
 dg = op_gui.DebugGUIs(optimiser, evaluator) # simple case
 dg = op_gui.DebugGUIs([optimiser1, optimiser2], [evaluator1, evaluator2]) # or more complex
@@ -46,10 +52,12 @@ import psutil
 import copy
 import re
 from scipy.stats import uniform
+import sklearn.gaussian_process as gp
 
 # local modules
 import optimisation as op
 import optimisation_gui as op_gui
+import optimisation_net as op_net
 
 # whether to skip tests which are slow (useful when writing a new test)
 NO_SLOW_TESTS = False
@@ -63,11 +71,52 @@ unittest.TestCase.longMessage = True
 # to poll so quickly, however when testing most of the evaluators are trivial
 # and so finish instantly.
 op.DEFAULT_HOST = '127.0.0.1' # internal only
-op.CONFIG_POLL = 0.1#TODO may no longer need
 op.CLIENT_TIMEOUT = 0.2
 op.SERVER_TIMEOUT = 0.4
-op.CHECKPOINT_POLL = 0.1#TODO: may no longer need
 op.NON_CRITICAL_WAIT = 0.5
+
+
+
+# use these parameters for the Gaussian processes of the Bayesian optimisers
+# used in testing. These defaults somewhat reflect the defaults of scikit. There
+# are no parameters to train for this kernel and so trains quickly.
+# https://github.com/scikit-learn/scikit-learn/blob/master/sklearn/gaussian_process/gpr.py
+#
+# NOTE: THESE ARE NOT GOOD VALUES for real world situations, they are chosen to
+# train quickly. See one of the Jupyter notebooks for realistic parameters.
+TEST_GP_PARAMS = {
+    'alpha':1e-5, # more noise than the default
+    'kernel': gp.kernels.ConstantKernel(1.0, constant_value_bounds='fixed') * \
+              gp.kernels.RBF(length_scale=1.0, length_scale_bounds='fixed'),
+    'n_restarts_optimizer':0, # nothing to train, parameters are fixed
+    'normalize_y':True,
+    'copy_X_train':True
+}
+
+def finish_off_evaluators(timeout=0.4):
+    '''
+    There is a possibility that the ACK from server->client was lost in which
+    case the client will keep re-sending the last results indefinitely since the
+    optimiser has shut down. In a real-world scenario they are doing the right
+    thing so there is nothing to fix, however since the threads cannot be
+    aborted, they must be dealt with some other way.
+
+    Call this function every time that the optimiser shuts down before the evaluator.
+    '''
+    start_time = time.time()
+    def should_stop():
+        return time.time() - start_time > timeout
+    def handle_request(msg):
+        if msg['type'] == 'job_request':
+            return None
+        elif msg['type'] == 'job_results':
+            return {'type' : 'ACK'}
+    def on_success(request, response):
+        pass
+    op_net.request_response_server(
+        (op.DEFAULT_HOST, op.DEFAULT_PORT),
+        0.1, handle_request, should_stop, on_success)
+
 
 class NumpyCompatableTestCase(unittest.TestCase):
     '''
@@ -175,6 +224,7 @@ def no_exceptions(self, loggable):
     self.assertNotIn('Exception', loggable.log_record)
     self.assertNotIn('inconsistent state', loggable.log_record)
 
+    #self.assertNotIn('error', loggable.log_record)
     #self.assertNotIn('warning', loggable.log_record)
     #self.assertNotIn('Non-critical error', loggable.log_record)
 
@@ -288,6 +338,7 @@ class TestUtils(NumpyCompatableTestCase):
         random_cfgs = [opt._random_config() for _ in range(num_points)]
         random_points = opt._random_config_points(num_points)
         self.assertEqual(random_points.shape, (num_points, 2)) # exclude b constant parameter
+        print_dot()
 
         # make sure that each parameter has a legal value (in range)
         for c in random_cfgs:
@@ -298,21 +349,26 @@ class TestUtils(NumpyCompatableTestCase):
             self.assertTrue(amin <= row[0] <= amax)
             # note: the values for the points should be
             self.assertTrue(np.log(cmin) <= row[1] <= np.log(cmax))
+        print_dot()
 
         # make sure that converting between points and configurations works correctly
         converted = [opt.point_to_config(opt.config_to_point(c)) for c in random_cfgs]
         self.assertEqual(random_cfgs, converted)
+        print_dot()
 
         # make sure that the mean values of each parameter is similar
         def check(samples, mu, sigma, tol=0.01):
-            print('mean[sample: {}, true: {}]'.format(statistics.mean(samples), mu))
-            print('stddev[sample: {}, true: {}]'.format(statistics.stdev(samples), sigma))
+            #print('mean[sample: {}, true: {}]'.format(statistics.mean(samples), mu))
+            #print('stddev[sample: {}, true: {}]'.format(statistics.stdev(samples), sigma))
             self.assertTrue(abs(statistics.mean(samples)-mu) <= tol)
             self.assertTrue(abs(statistics.stdev(samples)-sigma) <= tol)
 
         check([c.a for c in random_cfgs], a_dist.mean(), a_dist.std())
+        print_dot()
         check([row[0] for row in random_points], a_dist.mean(), a_dist.std())
+        print_dot()
         check([opt.point_to_config(op.make2D_row(row)).a for row in random_points], a_dist.mean(), a_dist.std())
+        print_dot()
 
         r'''
         Take a continuous random variable $X$ and define $Y=g(X)$ for some 1-1 mapping: $y$. For the case of log-uniform: $X\sim\mathcal U(\log b, \log a)$ and $g(x)=e^x$ so $g^{-1}(y)=\log y$.
@@ -334,8 +390,11 @@ class TestUtils(NumpyCompatableTestCase):
         c_E_xsq = (b**2-a**2)/(2*(lb-la))
         c_stddev = np.sqrt(c_E_xsq - c_mu)
         check([c.c for c in random_cfgs], c_mu, c_stddev, tol=0.05*cmax)
+        print_dot()
         check([row[1] for row in random_points], c_point_dist.mean(), c_point_dist.std())
+        print_dot()
         check([opt.point_to_config(op.make2D_row(row)).c for row in random_points], c_mu, c_stddev, tol=0.05*cmax)
+        print_dot()
 
 
 class TestOptimiser(NumpyCompatableTestCase):
@@ -506,6 +565,34 @@ class TestOptimiser(NumpyCompatableTestCase):
 
         self.assertIn(optimiser.best_sample(), [mks(2,3,2), mks(2,4,2)]) # either would be acceptable
 
+    @unittest.skipIf(NO_SLOW_TESTS, 'slow test')
+    def test_simple_server(self):
+        ''' have the optimiser run several times with max_jobs set '''
+        ranges = {'a':[1,2], 'b':[3,4]}
+        class TestEvaluator(op.Evaluator):
+            def test_config(self, config):
+                return config.a # placeholder cost function
+        mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
+
+        optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+        evaluator = TestEvaluator()
+
+        ev_thread = threading.Thread(target=evaluator.run_client, name='evaluator')
+        ev_thread.start()
+
+        optimiser.run_server(max_jobs=4)
+
+        evaluator.stop()
+        finish_off_evaluators()
+        ev_thread.join()
+
+        no_exceptions(self, optimiser)
+        no_exceptions(self, evaluator)
+
+        samples = [mks(1,3,1), mks(2,3,2), mks(1,4,1), mks(2,4,2)]
+        self.assertEqual(optimiser.samples, samples)
+        self.assertIn(optimiser.best_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
+
 
     def test_optimisation_sequential_stop(self):
         ''' have the optimiser run several times with max_jobs set '''
@@ -550,6 +637,7 @@ class TestOptimiser(NumpyCompatableTestCase):
         optimiser.run_server(max_jobs=4)
 
         evaluator.stop()
+        finish_off_evaluators()
         ev_thread.join()
 
         no_exceptions(self, optimiser)
@@ -709,10 +797,15 @@ def get_dict(optimiser, different_run=False):
         if different_run:
             # allowed to differ. The log and duration _should_ be different for different runs.
             # the stop flag may or may not be set depending on how the optimiser stopped (max_jobs or stop())
-            exclude = ['log_record', 'duration', '_stop_flag']
-            d = {k:v for k, v in optimiser.__dict__.items() if k not in exclude}
+            exclude = ['log_record', 'run_state', 'duration', '_stop_flag']
         else:
-            d = optimiser.__dict__.copy()
+            exclude = ['run_state'] # doesn't matter if this differs
+        d = {k:v for k, v in optimiser.__dict__.items() if k not in exclude}
+
+        if 'duration' in d.keys():
+            # allow the duration to differ slightly
+            # (note: ndigits is the number of decimal places, not total digits)
+            d['duration'] = round(d['duration'], ndigits=2)
 
         # cannot compare threading.Event objects, but what matters is their
         # set states.
@@ -866,11 +959,11 @@ class TestCheckpoints(NumpyCompatableTestCase):
                 # placeholder cost function
                 return op.Sample(config, config.a+config.b, extra={'test':np.array([1,2,3])})
 
-        optimiser = op.BayesianOptimisationOptimiser(ranges, pre_samples=3)
+        optimiser = op.BayesianOptimisationOptimiser(ranges, pre_samples=3, gp_params=TEST_GP_PARAMS)
         evaluator = TestEvaluator()
         def create_optimiser():
             ''' create a 'dirty' optimiser which is initialised identically but has been run '''
-            opt = op.BayesianOptimisationOptimiser(ranges, pre_samples=3)
+            opt = op.BayesianOptimisationOptimiser(ranges, pre_samples=3, gp_params=TEST_GP_PARAMS)
             # have to at least run a few Bayesian steps (ie max_jobs > pre_samples)
             opt.run_sequential(evaluator, max_jobs=random.randint(3, 5))
             return opt
@@ -1002,7 +1095,7 @@ class TestCheckpoints(NumpyCompatableTestCase):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        create_optimiser = lambda: op.BayesianOptimisationOptimiser(ranges)
+        create_optimiser = lambda: op.BayesianOptimisationOptimiser(ranges, gp_params=TEST_GP_PARAMS)
         evaluators = [TestEvaluator(), TestEvaluator(), TestEvaluator()]
         sort_samples = lambda samples: sorted(samples, key=lambda s:(s.config.a, s.config.b))
 
@@ -1066,9 +1159,18 @@ class TestCheckpoints(NumpyCompatableTestCase):
         # problem?)
         op_thread.join()
 
+
         no_exceptions(self, optimiser)
         for e in evaluators:
             no_exceptions(self, e)
+
+        for e in evaluators:
+            e.stop()
+        # if the evaluators are still trying to re-send results back, give them
+        # a small opportunity to do so
+        finish_off_evaluators()
+        for t in e_threads:
+            t.join()
 
         print('|', end='')
 
@@ -1085,25 +1187,10 @@ class TestCheckpoints(NumpyCompatableTestCase):
             no_exceptions(self, opt)
             if compare_results:
                 opt.samples = sort_samples(opt.samples)
-                #TODO
                 d1 = get_dict(optimiser, different_run=True)
                 d2 = get_dict(opt, different_run=True)
-                try:
-                    self.assertEqual(d1, d2)
-                except Exception as e:
-                    print(optimiser.log_record)
-                    print()
-                    print()
-                    print(opt.log_record)
-                    print(op.exception_string())
-                    #op_gui.DebugGUIs([optimiser, opt], []).wait()
-                    import pdb
-                    pdb.set_trace()
+                self.assertEqual(d1, d2)
 
-        for e in evaluators:
-            e.stop()
-        for t in e_threads:
-            t.join()
 
 
 
@@ -1213,7 +1300,7 @@ class TestBayesianOptimisation(NumpyCompatableTestCase):
                 print_dot()
                 return config.a + config.b # placeholder cost function
 
-        optimiser = op.BayesianOptimisationOptimiser(ranges, acquisition_function=acquisition_function)
+        optimiser = op.BayesianOptimisationOptimiser(ranges, acquisition_function=acquisition_function, gp_params=TEST_GP_PARAMS)
         evaluator = TestEvaluator()
 
         self.assertEqual(optimiser.best_sample(), None)
@@ -1235,7 +1322,7 @@ class TestBayesianOptimisation(NumpyCompatableTestCase):
                 print_dot()
                 return config.a + config.b # placeholder cost function
 
-        optimiser = op.BayesianOptimisationOptimiser(ranges, maximise_cost=True, acquisition_function='UCB')
+        optimiser = op.BayesianOptimisationOptimiser(ranges, maximise_cost=True, acquisition_function='UCB', gp_params=TEST_GP_PARAMS)
         evaluator = TestEvaluator()
 
         self.assertEqual(optimiser.best_sample(), None)

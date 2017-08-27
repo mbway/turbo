@@ -19,7 +19,6 @@ else:
 
 import time
 import json
-import struct
 import os
 import warnings
 
@@ -28,7 +27,6 @@ import pickle
 import base64
 import zlib
 
-import socket
 import threading
 # dummy => uses Threads rather than processes
 from multiprocessing.dummy import Pool as ThreadPool
@@ -47,23 +45,20 @@ from scipy.stats import norm # Gaussian/normal distribution
 
 
 # local modules
+import optimisation_net as op_net
 import plot3D
 
 
 # constants gathered here so that the defaults can be changed easily (eg for testing)
 DEFAULT_HOST = '0.0.0.0'
 DEFAULT_PORT = 9187
+
 CLIENT_TIMEOUT = 1.0 # seconds for the client to wait for a connection before retrying
 SERVER_TIMEOUT = 1.0 # seconds for the server to wait for a connection before retrying
-#TODO only needed for sequential running. sequential should probably just crash if not ready. might want to make a note of the change in behaviour in _ready_for_next_configuration
-CONFIG_POLL = 0.1 # seconds to wait for the optimiser to be ready for another configuration before retrying
-#TODO: no longer need i think. check for other instances of time.sleep
-CHECKPOINT_POLL = 1.0 # seconds to wait for outstanding jobs to finish
 #TODO: make sure there is something logged on a last resort timeout
 # This is to prevent deadlock but if a socket times out then it may be fatal. At
 # least this way the problem is visible and you can restore from a checkpoint
 # rather than have it sit in deadlock forever.
-LAST_RESORT_TIMEOUT = 20.0 # seconds
 NON_CRITICAL_WAIT = 1.0 # seconds to wait after a non-critical network error before retrying
 
 def ON_EXCEPTION(e):
@@ -79,6 +74,7 @@ def ON_EXCEPTION(e):
 
 
 
+#TODO: move all this stuff to optimisation_utils.py
 class dotdict(dict):
     '''
         provide syntactic sugar for accessing dict elements with a dot eg
@@ -98,16 +94,6 @@ class dotdict(dict):
     def copy(self):
         ''' copy.copy() does not work with dotdict '''
         return dotdict(dict.copy(self))
-
-class no_op_context():
-    '''
-    example usage:
-    with my_lock or null_context(): # if my_lock is sometimes None
-    '''
-    def __enter__(self):
-        pass
-    def __exit__(self, exc_type, exc_value, traceback):
-        pass
 
 def set_str(set_):
     '''
@@ -153,6 +139,7 @@ def JSON_decode_binary(data):
     ''' decode data encoded with JSON_encode_binary '''
     return pickle.loads(zlib.decompress(base64.b64decode(data)))
 
+#TODO: make2D_col
 def make2D(arr):
     ''' convert a numpy array with shape (l,) into an array with shape (l,1)
         (np.atleast_2d behaves similarly but would give shape (1,l) instead)
@@ -250,6 +237,33 @@ def is_numeric(obj):
 
     return all(hasattr(obj, attr) for attr in attrs)
 
+class WarningCatcher(warnings.catch_warnings):
+    '''
+    capture any warnings raised within the with statement and instead of
+    printing them, pass them to the given function. Example:
+    with WarningCatcher(lambda warn: print(warn)):
+        # stuff
+
+    Note: it is possible to nest WarningCatchers, in which case the inner most
+        catcher is the only one which receives the warning.
+    Note: because of the nature of warnings, on_warning is only called when the
+        with statement ends rather than immediately when the warning is raised
+        (unlike exceptions).
+    '''
+    def __init__(self, on_warning):
+        '''
+        on_warning: a function which takes a warning and does something with it
+        '''
+        super(WarningCatcher, self).__init__(record=True)
+        self.on_warning = on_warning
+    def __enter__(self):
+        self.warning_list = super(WarningCatcher, self).__enter__()
+    def __exit__(self, *args):
+        for warn in self.warning_list:
+            self.on_warning(warn)
+        super(WarningCatcher, self).__exit__(*args)
+
+
 
 class Job(object):
     '''
@@ -297,98 +311,26 @@ class Sample(object):
                 self.extra == other.extra)
 
 
-def send_json(conn, obj, encoder=None):
-    '''
-    send the given object through the given connection by first serialising the
-    object to JSON.
-    conn: the connection to send through
-    obj: the object to send (must be JSON serialisable)
-    encoder: a JSONEncoder to use
-    '''
-    data = json.dumps(obj, cls=encoder).encode('utf-8')
-    # ! => network byte order (Big Endian)
-    # I => unsigned integer (4 bytes)
-    length = struct.pack('!I', len(data))
-    # don't wait for length to fully send with sendall because we can start
-    # sending the payload along with it.
-    conn.send(length)
-    conn.sendall(data)
-
-def send_empty(conn):
-    ''' send a 4 byte length of 0 to signify 'no data' '''
-    conn.sendall(struct.pack('!I', 0))
-
-def read_exactly(conn, num_bytes):
-    '''
-    read exactly the given number of bytes from the connection
-    returns None if the connection closes before the number of bytes is reached
-    '''
-    data = bytes()
-    while len(data) < num_bytes: # until the length is fully read
-        left = num_bytes - len(data)
-        # documentation recommends a small power of 2 to give best results
-        chunk = conn.recv(min(4096, left))
-        if len(chunk) == 0: # connection broken: will never receive any data over conn again
-            return None
-        else:
-            data += chunk
-    assert len(data) == num_bytes
-    return data
-
-def recv_json(conn):
-    '''
-    receive a JSON object from the given connection
-    '''
-    # read the length. Be lenient with the connection here since once the length
-    # is received the peer obviously wants to communicate, but until then we are
-    # not sure. If the connection breaks or times out before the length is read,
-    # treat that as if a length of 0 was transmitted.
-    try:
-        data = read_exactly(conn, 4)
-    except socket.timeout: # last resort timeout to prevent deadlock
-        return None
-    except socket.error as e:
-        if e.errno == 104: # connection reset by peer
-            return None
-        else:
-            raise e
-    if data is None: # connection closed before a length was sent
-        return None # indicates 'no data'
-    length, = struct.unpack('!I', data) # see send_json for the protocol
-    if length == 0:
-        return None # indicates 'no data'
-    else:
-        data = read_exactly(conn, length)
-        assert data is not None, 'json data is None because the connection closed'
-        obj = json.loads(data.decode('utf-8'))
-        return obj
-
-
-# Details of the network protocol between the optimiser and the evaluator
-# Optimiser sets up a server and listens for clients. Every time a client
-# (evaluator) connects the optimiser spawns a thread to handle the client,
-# allowing it to accept more clients. In the thread for the connected client, it
-# is sent a configuration (serialised as JSON) to evaluate. The message is a
-# length followed by the JSON content. The thread waits for the evaluator to reply
-# with the results (also JSON serialised). Once the reply has been received, the
-# thread is free to handle more clients (as part of a thread pool).
-#
-# If a client connection is open and the optimiser wishes to shutdown, it can send
-# a length of 0 to indicate 'no data' the evaluator can then resume trying to
-# connect in-case the server comes back. Alternatively, when the server shuts
-# down, the connection breaks (but not always). Both are used to detect a
-# disconnection. The server does not keep a record of individual clients and so
-# does not notify each client that the server has shut down (only the currently
-# connected ones) because it cannot know when it has notified every client.
-# After the server shuts down the clients return to attempting connections.
-#
-# When connecting to the server, there are several different ways the call to
-# connect could fail. In any of these situations: simply wait a while and try
-# again (without reporting an error)
+# Details of the network protocol between the optimiser and the evaluator:
+# Optimiser sets up a server and listens for clients.
+# Each interaction takes the form of
+# client -> server: request
+# server -> client: response
+# (with 4 bytes for the length followed by a JSON string)
+# the request may be asking for a new job, or giving back the results of a
+# finished job. In the case of a new job: the response is a job or empty if
+# there is no job available. In the case of results: the response is a small
+# acknowledgement to verify that the results were received.
+# If an error occurs then the entire interaction restarts (after a short delay).
+# If the job request fails, the optimiser keeps a copy of the job and is able to
+# re-send the data until it succeeds. If returning the results fails, the
+# evaluator can keep re-sending them until it succeeds, the optimiser will
+# discard any duplicates.
 #
 # If an evaluator accepts a job then they are obliged to complete it. If the
 # evaluator crashes or otherwise fails to produce results, the job remains in the
-# queue and will never finish processing.
+# queue and will never finish processing (which makes the state of the optimiser
+# inconsistent and unable to checkpoint).
 
 class Evaluator(object):
     '''
@@ -403,125 +345,55 @@ class Evaluator(object):
         self.noisy = False
         self._stop_flag = threading.Event() # is_set() => finish gracefully and stop
 
-    def _make_connection(self, host, port, timeout, ignore_stop_flag):
-        connected = False
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # TCP
-        self.log('attempting to connect to {}:{}'.format(host, port))
-        sock.settimeout(timeout) # only while trying to connect
-
-        # connect to the server
-        while ignore_stop_flag or not self.wants_to_stop():
-            try:
-                sock.connect((host, port))
-                self.log('connection established')
-                # should never time out, but don't want deadlock
-                sock.settimeout(LAST_RESORT_TIMEOUT)
-                connected = True
-                break
-            except socket.timeout:
-                continue # this is normal and intentional to keep checking _stop_flag
-            except socket.error as e:
-                # socket.error is a catch-all instead of manually
-                # dealing with individual exceptions. The ones I have
-                # encountered are: ConnectionRefusedError,
-                # ConnectionAbortedError, ConnectionResetError,
-                # BlockingIOError, SIGPIPE
-
-                # don't add the full traceback because it will break the unit tests and it isn't necessary
-                self.log('Non-critical error trying to connect to optimiser (will retry): {}: {}'.format(type(e), e))
-                #print(e, flush=True)
-                time.sleep(NON_CRITICAL_WAIT) # good idea to wait before trying again
-                continue
-
-        if not ignore_stop_flag and self.wants_to_stop():
-            if connected:
-                self.log('shutting down connection')
-                send_empty(sock)
-            sock.close() # close (free resources) regardless of whether connection was made
-            return None
-        else:
-            return sock
-
-    def _request_job(self, connect_args):
-        sock = self._make_connection(*connect_args, ignore_stop_flag=False)
-        if sock is None: # evaluator wants to shut down
-            return None
-        try:
-            try:
-                send_json(sock, {'type' : 'job_request'})
-            except socket.error as e:
-                if e.errno == 104: # connection reset by peer
-                    return None
-                elif e.errno == 32: # broken pipe
-                    return None
-                else:
-                    raise e
-
-            job = recv_json(sock)
-
-            if job is None: # optimiser signalled no job available
-                self.log('no job available')
-                return None
-            else:
-                # job has 'config', 'num' and 'setup_duration' fields
-                assert set(job.keys()) == set(['config', 'num', 'setup_duration']), 'malformed job request: {}'.format(job)
-                #TODO if the job is malformed, don't ACK, instead log the error and discard the job
-                return job
-        finally:
-            sock.close()
-
-    def _process_job(self, job, connect_args):
-        start_time = time.time()
-        job_num = job['num']
-        config = dotdict(job['config'])
-
-        self.log('evaluating job {}: config: {}'.format(
-            job_num, config_string(config, precise=True)))
-        results = self.test_config(config)
-        samples = Evaluator.samples_from_test_results(results, config)
-        # for JSON serialisation
-        samples = [(s.config, s.cost, s.extra) for s in samples]
-
-        # will make a connection regardless of whether stop_flag is set
-        sock = self._make_connection(*connect_args, ignore_stop_flag=True)
-        assert sock is not None
-        # don't print extra values because it could be large
-        self.log('returning results: {}'.format([(config, cost, list(extra.keys())) for config, cost, extra in samples]))
-        try:
-            # add this field
-            job['evaluation_duration'] = time.time()-start_time
-            msg_dict = {
-                'type' : 'job_results',
-                'job' : job,
-                'samples' : samples
-            }
-            send_json(sock, msg_dict, encoder=NumpyJSONEncoder)
-        finally:
-            sock.close()
-
     def run_client(self, host=DEFAULT_HOST, port=DEFAULT_PORT, max_jobs=inf,
                    timeout=CLIENT_TIMEOUT):
         self._stop_flag.clear()
+        self.log('evaluator client starting...')
         num_jobs = 0
-        connect_args = (host, port, timeout)
+
+        def should_stop():
+            return self.wants_to_stop() or num_jobs >= max_jobs
+        never_stop = lambda: False
+
+        def request_response(should_stop, request):
+            ''' both responses share a lot of arguments in common '''
+            return op_net.request_response_client(
+                (host, port), timeout, should_stop, request,
+                error_wait=NON_CRITICAL_WAIT, JSON_encoder=NumpyJSONEncoder)
+
         try:
-            while not self.wants_to_stop() and num_jobs < max_jobs:
-                job = self._request_job(connect_args)
-                if job is None:
-                    # either no job available, in which case try again, or the
-                    # evaluator wants to shut down, in which case the loop will stop.
-                    if self.wants_to_stop():
+            while not should_stop():
+                self.log('requesting job from {}:{}'.format(host, port))
+                job_request = {'type' : 'job_request'}
+                job = request_response(should_stop, job_request)
+                self.log('received job: {}'.format(job))
+                # stopped attempting to connect because should_stop became True
+                if job == 'should_stop':
+                    break
+                elif job is None:
+                    self.log('no job available')
+                    time.sleep(NON_CRITICAL_WAIT) # not an error, but wait a while
+                    continue
+
+                assert set(job.keys()) == set(['config', 'num', 'setup_duration']), \
+                        'malformed job request: {}'.format(job)
+
+                results_msg = self._evaluate_job(job)
+
+                # keep sending results back until acknowledgement is received.
+                # The optimiser will discard the duplicates
+                while True:
+                    # don't ever stop trying to connect even if
+                    # self.wants_to_stop() because after a job is requested,
+                    # the client must return the results
+                    ack = request_response(never_stop, results_msg)
+                    assert ack != 'should_stop'
+
+                    # acknowledgement received
+                    if ack['type'] == 'ACK':
                         break
-                    else:
-                        time.sleep(NON_CRITICAL_WAIT)
-                        continue
-                else:
-                    # will return the results regardless of whether the stop
-                    # flag is set because the contract with the server is that
-                    # the evaluator _must_ return the results of a job it
-                    # started.
-                    self._process_job(job, connect_args)
-                    num_jobs += 1
+                num_jobs += 1
+                self.log('results sent successfully')
 
             if self.wants_to_stop():
                 self.log('stopping because of manual shut down')
@@ -533,93 +405,32 @@ class Evaluator(object):
         finally:
             self.log('evaluator shut down')
 
+    def _evaluate_job(self, job):
+        start_time = time.time()
+        job_num = job['num']
+        config = dotdict(job['config'])
 
-    def run_client_old(self, host=DEFAULT_HOST, port=DEFAULT_PORT, max_jobs=inf,
-                   poll_interval=CLIENT_TIMEOUT):
-        '''
-        receive jobs from an Optimiser server and evaluate them until the server
-        shuts down.
+        self.log('evaluating job {}: config: {}'.format(
+            job_num, config_string(config, precise=True)))
 
-        host: the hostname/IP where the optimiser server is running
-        port: the port number that the optimiser server is listening on
-        max_jobs: the maximum number of jobs to allow for this run (not in total)
-        poll_interval: seconds for the client to wait for a connection before retrying
-        '''
-        sock = None
-        try:
-            self.log('evaluator client starting...')
-            self._stop_flag.clear()
-            num_jobs = 0
+        results = self.test_config(config)
+        samples = Evaluator.samples_from_test_results(results, config)
+        # for JSON serialisation
+        samples = [(s.config, s.cost, s.extra) for s in samples]
 
-            while not self._stop_flag.is_set() and num_jobs < max_jobs:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # TCP
-                self.log('attempting to connect to {}:{}'.format(host, port))
-                sock.settimeout(poll_interval) # only while trying to connect
 
-                # connect to the server
-                while not self._stop_flag.is_set():
-                    try:
-                        sock.connect((host, port))
-                        break
-                    except socket.timeout:
-                        continue # this is normal and intentional to keep checking _stop_flag
-                    except socket.error as e:
-                        # socket.error is a catch-all instead of manually
-                        # dealing with individual exceptions. The ones I have
-                        # encountered are: ConnectionRefusedError,
-                        # ConnectionAbortedError, ConnectionResetError,
-                        # BlockingIOError
+        self.log('returning results: {}'.format(
+            [(config, cost, list(extra.keys())) for config, cost, extra in samples]))
 
-                        #TODO: handle SIGPIPE
-                        # don't add the full traceback because it will break the unit tests and it isn't necessary
-                        self.log('Non-critical error trying to connect to optimiser (will retry): {}: {}'.format(type(e), e))
-                        time.sleep(1) # good idea to wait before trying again
-                        continue
-                if self._stop_flag.is_set():
-                    break
+        job['evaluation_duration'] = time.time()-start_time # add this field
+        msg_dict = {
+            'type' : 'job_results',
+            'job' : job,
+            'samples' : samples
+        }
+        #TODO: is samples double nested [[(), ()]] because it looks like it in wireshark
+        return msg_dict
 
-                self.log('connection established')
-                sock.settimeout(None) # wait forever (blocking mode)
-
-                try:
-                    job = recv_json(sock)
-                except socket.error as e:
-                    self.log('FAILED to receive job from optimiser ({}: {})'.format(type(e), e))
-                    continue
-
-                # optimiser finished and sent 0 length to inform the evaluator
-                if job is None:
-                    self.log('FAILED to receive job from optimiser (0 length)')
-                    continue
-
-                job_num = job['num']
-                config = dotdict(job['config'])
-
-                self.log('evaluating job {}: config: {}'.format(
-                    job_num, config_string(config, precise=True)))
-                results = self.test_config(config)
-                samples = Evaluator.samples_from_test_results(results, config)
-
-                # for JSON serialisation
-                samples = [(s.config, s.cost, s.extra) for s in samples]
-
-                self.log('returning results: {}'.format(results))
-                send_json(sock, {'samples' : samples}, encoder=NumpyJSONEncoder)
-                sock.close()
-
-                num_jobs += 1
-
-            if self._stop_flag.is_set():
-                self.log('stopping because of manual shut down')
-            elif num_jobs >= max_jobs:
-                self.log('stopping because max_jobs reached')
-        except Exception as e:
-            self.log('Exception raised during client run:\n{}'.format(exception_string()))
-            ON_EXCEPTION(e)
-        finally:
-            self.log('evaluator shutting down')
-            if sock is not None:
-                sock.close()
 
     def stop(self):
         ''' signal to the evaluator client to stop and shutdown gracefully '''
@@ -716,6 +527,9 @@ class Optimiser(object):
         # whether to print to stdout from _log()
         self.noisy = False
 
+        # state useful only when the optimiser is running
+        self.run_state = None
+
         # is_set() => finish gracefully and stop
         self._stop_flag = threading.Event()
 
@@ -748,17 +562,6 @@ class Optimiser(object):
             print(msg, end='')
 
 # Running Optimisation
-
-    def _wait_for_ready(self):
-        '''
-        wait for the optimiser to be ready to produce another configuration to
-        test. Has no effect if already ready.
-        '''
-        if not self._ready_for_next_configuration():
-            self._log('not ready for the next configuration yet')
-            while not self._ready_for_next_configuration():
-                time.sleep(CONFIG_POLL)
-            self._log('now ready for next configuration')
 
     def _next_job(self):
         '''
@@ -801,130 +604,67 @@ class Optimiser(object):
                 (' (current best)' if self.sample_is_best(s) else '')
             ))
 
-    def _shutdown_message(self, old_duration, this_duration,
-                          max_jobs_exceeded, out_of_configs, exception_caught):
+    def _shutdown_message(self, state):
         '''
         post to the log about the run that just finished, including reason for
         the optimiser stopping.
         old_duration: the duration of all runs except for this one
         this_duration: the duration of this run
         '''
-        self.duration = old_duration + this_duration
+        self.duration = state.old_duration + state.run_time()
         self._log('total time taken: {} ({} this run)'.format(
-            time_string(self.duration), time_string(this_duration)))
+            time_string(self.duration), time_string(state.run_time())))
 
-        outstanding_jobs = self.num_started_jobs - self.num_finished_jobs
-        if exception_caught:
+        if state.exception_caught:
             self._log('optimisation stopped because an exception was thrown.')
-        elif max_jobs_exceeded:
-            self._log('optimisation stopped because the maximum number of jobs was exceeded')
-        elif self._stop_flag.is_set():
-            self._log('optimisation manually shut down gracefully')
-        elif out_of_configs and outstanding_jobs == 0:
-            self._log('optimisation finished (out of configurations).')
+        elif self.num_started_jobs - self.num_finished_jobs == 0: # no outstanding jobs
+            if state.finished_this_run >= state.max_jobs:
+                self._log('optimisation stopped because the maximum number of jobs was exceeded')
+            elif self._stop_flag.is_set():
+                self._log('optimisation manually shut down gracefully')
+            elif state.out_of_configs:
+                self._log('optimisation finished (out of configurations).')
         else:
-            self._log('stopped for an unknown reason. May be in an inconsistent state. (details: {} / {} / {})'.format(
-                self._stop_flag.is_set(), out_of_configs, outstanding_jobs))
+            self._log('error: stopped for an unknown reason with {} outstanding jobs.\n' +
+                      '\tMay be in an inconsistent state. (details: stop_flag={}, state={})'.format(
+                self.num_started_jobs - self.num_finished_jobs, self._stop_flag.is_set(), state.__dict__))
 
-    def _handle_checkpoint(self, lock=None):
-        ''' handle saving a checkpoint during a run if signalled to '''
-        if self._checkpoint_flag.is_set():
-            if self.num_started_jobs > self.num_finished_jobs:
-                self._log('waiting for {} outstanding jobs to finish before taking a snapshot'.format(
-                    self.num_started_jobs-self.num_finished_jobs))
-                while self.num_started_jobs > self.num_finished_jobs:
-                    time.sleep(CHECKPOINT_POLL)
 
-            with lock or no_op_context(): # use no-op if lock is None
-                self._log('saving checkpoint to "{}"'.format(self.checkpoint_filename))
-                self.save_now()
-                self._checkpoint_flag.clear()
-
-    def _handle_client_old(self, conn, lock, exception_caught, job):
-        '''
-        run as part of a thread pool, interact with a remote evaluator and
-        process the results
-        conn: the socket to communicate with the client (already connected).
-            Closed after the job has finished
-        lock: a lock which must be obtained before modifying anything in self
-        exception_caught: an event to set if an exception is thrown
-        job: the job to have the client evaluate
-        '''
-        try:
-            msg = {'num': job.num, 'config': job.config}
-            send_json(conn, msg, encoder=NumpyJSONEncoder)
-            results = recv_json(conn) # keep waiting until the client is done
-            # during transmission: serialised to tuples
-            results = [Sample(dotdict(config), cost, extra)
-                       for config, cost, extra in results['samples']]
-
-            with lock:
-                self._process_job_results(job, results)
-        except Exception as e:
-            exception_caught.set()
-            with lock:
-                self._log('Exception raised while processing job {} (in a worker thread):\n{}'.format(
-                    job.num, exception_string()))
-            ON_EXCEPTION(e)
-        finally:
-            conn.close()
-
-    def _accept_connection(self, sock):
-        '''
-        wait for a client to connect
-        note: may throw exceptions
-        note: may return a connection even if stop flag is set
-        '''
-        while not self._stop_flag.is_set():
-            try:
-                # conn is another socket object
-                conn, addr = sock.accept()
-                self._log('connection from {}:{}'.format(*addr))
-                return conn, addr
-            except socket.timeout:
-                # if the checkpoint flag is set, give clients a chance to
-                # connect (unlike with the stop flag) but if there are none
-                # waiting, return so the optimiser can check if it is ready to
-                # make a checkpoint.
-                if self._checkpoint_flag.is_set():
-                    return None, None
-                else:
-                    continue
-        return None, None
-
-    def _handle_client(self, conn, state, max_jobs):
+    def _handle_client(self, msg, state):
         '''
         handle a single interaction with a client
+        msg: assumed not to be None
         '''
-        try:
-            msg = recv_json(conn)
-        except socket.timeout:
-            self._log('evaluator connection timed out')
-            conn.shutdown(socket.SHUT_RDWR)
-            time.sleep(NON_CRITICAL_WAIT)
-            return
+        assert 'type' in msg.keys(), 'malformed request: {}'.format(msg)
 
-        #TODO: if msg is not None: check that 'type' in keys
-        if msg is None: # evaluator wishes to shutdown
-            self._log('evaluator requested nothing')
-            conn.shutdown(socket.SHUT_RDWR)
-            time.sleep(NON_CRITICAL_WAIT)
-
-        elif msg['type'] == 'job_request':
-            if state.started_this_run >= max_jobs:
+        if msg['type'] == 'job_request':
+            # allowed to re-send the failed job even if generating new ones is
+            # not allowed at this time.
+            if state.requested_job is not None:
+                # re-send the last requested job because the last request did not succeed
+                self._log('re-sending the last job since there was an error')
+                job_dict = {
+                    'config' : state.requested_job.config,
+                    'num' : state.requested_job.num,
+                    'setup_duration' : state.requested_job.setup_duration
+                }
+                return job_dict
+            elif self._wants_to_stop(state):
                 self._log('not allowing new jobs (stopping)')
-                send_empty(conn)
+                return None # send empty
             elif self._checkpoint_flag.is_set():
                 self._log('not allowing new jobs (taking checkpoint)')
-                send_empty(conn)
+                return None # send empty
             elif not self._ready_for_next_configuration():
                 self._log('not allowing new jobs (not ready)')
-                send_empty(conn)
+                return None # send empty
             else:
                 job = self._next_job()
+                # store in-case it has to be re-sent
+                state.requested_job = job
                 if job is None:
                     state.out_of_configs = True
-                    send_empty(conn) # signal no more jobs available
+                    return None # send empty to signal no more jobs available
                 else:
                     state.started_job_ids.add(job.num)
                     state.started_this_run += 1
@@ -933,11 +673,12 @@ class Optimiser(object):
                         'num' : job.num,
                         'setup_duration' : job.setup_duration
                     }
-                    send_json(conn, job_dict, encoder=NumpyJSONEncoder)
+                    return job_dict
 
         elif msg['type'] == 'job_results':
             assert set(msg.keys()) == set(['type', 'job', 'samples']), 'malformed message: {}'.format(msg)
-            assert set(msg['job'].keys()) == set(['config', 'num', 'setup_duration', 'evaluation_duration']), 'malformed job message: {}'.format(msg['job'])
+            job_keys = set(['config', 'num', 'setup_duration', 'evaluation_duration'])
+            assert set(msg['job'].keys()) == job_keys, 'malformed job message: {}'.format(msg['job'])
 
             if msg['job']['num'] not in state.started_job_ids:
                 self._log('Non-critical error: received results from a job that was not started this run: {}'.format(msg))
@@ -952,26 +693,44 @@ class Optimiser(object):
                 job = Job(**msg['job'])
                 self._process_job_results(job, results)
                 state.finished_this_run += 1
+            # send acknowledgement that the results were received and not
+            # malformed (even if they were duplicates and were discarded)
+            return {'type' : 'ACK'}
 
         else:
             raise Exception('invalid request: {}'.format(msg))
 
+    def _wants_to_stop(self, state):
+        '''
+        whether the optimiser wants to stop, regardless of whether it can
+        (ignores outstanding jobs). In this state the optimiser should not
+        accept new job requests.
+        '''
+        return (self._stop_flag.is_set() or
+                state.finished_this_run >= state.max_jobs or
+                state.out_of_configs)
+
     def run_server(self, host=DEFAULT_HOST, port=DEFAULT_PORT, max_jobs=inf,
                    timeout=SERVER_TIMEOUT):
         self._log('starting optimisation server at {}:{}'.format(host, port))
-
         self._stop_flag.clear()
-        old_duration = self.duration # duration as-of the start of this run
-        checkpoint_flag_was_set = False # to only log once
 
-        class RunState:
-            def __init__(self):
+        class ServerRunState:
+            def __init__(self, optimiser, max_jobs):
                 self.start_time = time.time()
+                self.old_duration = optimiser.duration # duration as-of the start of this run
+                self.max_jobs = max_jobs
+
+                self.checkpoint_flag_was_set = False # to only log once
 
                 # count number of jobs started and finished this run
                 self.started_this_run = 0
                 self.finished_this_run = 0
                 self.started_job_ids = set()
+
+                # used to re-send jobs that failed to reach the evaluator. Set
+                # back to None after a request-response succeeds.
+                self.requested_job = None
 
                 # flags to diagnose the stopping conditions
                 self.out_of_configs = False
@@ -981,229 +740,50 @@ class Optimiser(object):
                 return time.time() - self.start_time
             def num_outstanding_jobs(self):
                 return self.started_this_run - self.finished_this_run
-        state = RunState()
+        state = ServerRunState(self, max_jobs)
+        self.run_state = state
 
-        sock = None
+        def should_stop():
+            # deal with checkpoints
+            if self._checkpoint_flag.is_set():
+                outstanding_count = state.num_outstanding_jobs()
+                if outstanding_count > 0 and not state.checkpoint_flag_was_set:
+                    self._log('waiting for {} outstanding jobs {} to finish before taking a snapshot'.format(
+                        outstanding_count, set_str(state.started_job_ids-self.finished_job_ids)))
+                    state.checkpoint_flag_was_set = True
+                elif outstanding_count == 0:
+                    self._handle_checkpoint()
+                    state.checkpoint_flag_was_set = False
+                elif outstanding_count < 0:
+                    raise ValueError(outstanding_count)
+
+            # return whether the server should stop
+            can_stop = state.num_outstanding_jobs() == 0
+            return self._wants_to_stop(state) and can_stop
+
+        def handle_request(request):
+            return self._handle_client(request, state)
+
+        def on_success(request, response):
+            # update the timer
+            self.duration = state.old_duration + state.run_time()
+            if request['type'] == 'job_request':
+                # the interaction that succeeded was a job request
+                state.requested_job = None # job reached evaluator
+
         try:
-            # server socket for the clients to connect to
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # TCP
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) # able to re-use host/port combo even if in use
-            sock.bind((host, port))
-        except Exception as e:
-            self._log('failed to set up optimiser server with exception: {}'.format(exception_string()))
-            return
-
-        #TODO
-        sock.listen(16) # maximum number of connections allowed to queue
-        sock.settimeout(timeout) # timeout for accept, not inherited by the client connections
-
-        conn = None
-        try:
-            ready_to_stop = lambda: self._stop_flag.is_set() and state.num_outstanding_jobs() == 0
-            while (not ready_to_stop() and
-                   state.finished_this_run < max_jobs and
-                   not state.out_of_configs):
-
-                #self._log('waiting for a connection')
-                #outstanding = started_job_ids - self.finished_job_ids
-                #self._log('outstanding job IDs: {}'.format(set_str(outstanding)))
-
-                # deal with checkpoints
-                if self._checkpoint_flag.is_set():
-                    outstanding_count = state.num_outstanding_jobs()
-                    if outstanding_count > 0 and not checkpoint_flag_was_set:
-                        self._log('waiting for {} outstanding jobs to finish before taking a snapshot'.format(
-                            outstanding_count))
-                        checkpoint_flag_was_set = True
-                    elif outstanding_count == 0:
-                        self.save_now()
-                        self._checkpoint_flag.clear()
-                        checkpoint_flag_was_set = False
-                    elif outstanding_count < 0:
-                        raise ValueError(outstanding_count)
-
-
-                conn, addr = self._accept_connection(sock)
-                if conn is None:
-                    # stop flag was set _before_ a client connected
-                    # or checkpoint flag was set _and_ no client connected
-                    continue
-                # stop flag may be set after the client connected, in which case we
-                # have to serve that client before stopping
-
-
-                try:
-                    conn.settimeout(LAST_RESORT_TIMEOUT)
-                    self._handle_client(conn, state, max_jobs)
-                finally:
-                    conn.close()
-                    conn = None
-
-                self.duration = old_duration + state.run_time()
-
+            op_net.request_response_server(
+                (host, port), timeout, handle_request, should_stop, on_success,
+                JSON_encoder=NumpyJSONEncoder
+            )
         except Exception as e:
             self._log('Exception raised during run:\n{}'.format(exception_string()))
             state.exception_caught = True
             ON_EXCEPTION(e)
-        finally:
-            if sock is not None:
-                sock.shutdown(socket.SHUT_RDWR)
-                #TODO: how much waiting is required?
-                #time.sleep(1)
-                sock.close()
-            if conn is not None:
-                conn.close()
-
-        if self._checkpoint_flag.is_set():
-            self._log('saving checkpoint to "{}"'.format(self.checkpoint_filename))
-            self.save_now()
-            self._checkpoint_flag.clear()
-
-        max_jobs_exceeded = state.finished_this_run >= max_jobs
-        #TODO refactor to just pass state
-        self._shutdown_message(old_duration, state.run_time(),
-                               max_jobs_exceeded, state.out_of_configs, state.exception_caught)
-
-
-
-    def run_server_old(self, host=DEFAULT_HOST, port=DEFAULT_PORT, max_clients=4,
-                   max_jobs=inf, poll_interval=SERVER_TIMEOUT):
-        '''
-        run a server which serves jobs to any listening evaluators. Evaluator
-        clients are assumed to be interchangeable, performing the same
-        calculations, excluding some random variation. Evaluators may process
-        jobs at different rates, faster evaluators will be assigned more jobs
-        and so need not sit idle.
-
-        host: the hostname/IP for the optimiser to listen on
-        port: the port number for the optimiser to listen on
-        max_clients: the maximum number of clients to expect to connect. If
-            another connects then their job will not be served until there is a
-            free thread to deal with it.
-        max_jobs: the maximum number of jobs to allow for this run (not in total)
-        poll_interval: seconds for the server to wait for a connection before retrying
-        '''
-        pool = None
-        sock = None
-        conn = None
-        try:
-            self._log('starting optimisation server...')
-
-            self._stop_flag.clear()
-            run_start_time = time.time()
-            old_duration = self.duration # duration as-of the start of this run
-            num_jobs = 0 # count number of jobs this run
-            started_job_ids = set()
-
-            # flags to diagnose the stopping conditions
-            out_of_configs = False
-            exception_caught = False
-            # set when an exception happens in one of the client threads
-            exception_in_pool = threading.Event()
-
-            # make sure the client handlers don't update self at the same time
-            lock = threading.RLock() # re-entrant lock
-            pool = ThreadPool(processes=max_clients)
-
-            # server socket for the clients to connect to
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # TCP
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) # able to re-use host/port combo even if in use
-
-            # for some reason even with REUSEADDR the socket may fail to bind.
-            # it may be because it takes a moment for the socket to reset after closing
-            while True:
-                try:
-                    sock.bind((host, port))
-                    break
-                except OSError as e:
-                    if e.errno == 98: # address already in use
-                        self._log('address already in use, try again')
-                        time.sleep(1)
-                        continue
-                    else:
-                        raise e
-
-            sock.listen(max_clients) # enable listening on the socket. backlog=max_clients
-            sock.settimeout(poll_interval) # timeout for accept, not inherited by the client connections
-
-            while (not self._stop_flag.is_set() and
-                   not exception_in_pool.is_set() and
-                   num_jobs < max_jobs):
-
-                with lock:
-                    self._log('outstanding job IDs: {}'.format(
-                        set_str(started_job_ids-self.finished_job_ids)))
-                    self._log('waiting for a connection')
-
-                # wait for a client to connect
-                while not self._stop_flag.is_set() and not exception_in_pool.is_set():
-                    self._handle_checkpoint(lock) # save a checkpoint if signalled to
-                    try:
-                        # conn is another socket object
-                        conn, addr = sock.accept()
-                        break
-                    except socket.timeout:
-                        conn = None
-                        continue
-                if self._stop_flag.is_set() or exception_in_pool.is_set():
-                    break
-
-                with lock:
-                    self._log('connection accepted from {}:{}'.format(*addr))
-
-                # don't want to wait for the next configuration while holding the lock
-                # since this may result in deadlock
-                self._wait_for_ready()
-
-                # don't want finished samples to be added during the Bayes step
-                with lock:
-                    # will wait for ready again, but should have no effect since
-                    # the optimiser is now ready
-                    job = self._next_job()
-                    if job is None:
-                        out_of_configs = True
-                        break
-                    started_job_ids.add(job.num)
-
-                pool.apply_async(self._handle_client_old, (conn, lock, exception_in_pool, job))
-                #self._handle_client(conn, lock, exception_in_pool, job)
-
-                conn = None
-                num_jobs += 1
-                with lock:
-                    self.duration = old_duration + (time.time()-run_start_time)
-
-        except Exception as e:
-            self._log('Exception raised during run:\n{}'.format(exception_string()))
-            exception_caught = True
-            ON_EXCEPTION(e)
-        finally:
-            # stop accepting new connections
-            if sock is not None:
-                sock.close()
-
-            # finish up active jobs
-            if pool is not None:
-                with lock:
-                    self._log('waiting for active jobs to finish')
-                pool.close() # worker threads will exit once done
-                pool.join()
-                self._log('active jobs finished')
-
-            # clean up lingering client connection if there is one (connection
-            # was accepted before optimiser stopped)
-            if conn is not None:
-                self._log('notifying client which was waiting for a job')
-                send_empty(conn)
-                conn.close()
 
         self._handle_checkpoint() # save a checkpoint if signalled to
-
-        this_duration = time.time() - run_start_time
-        max_jobs_exceeded = num_jobs >= max_jobs
-        exception_caught |= exception_in_pool.is_set()
-        self._shutdown_message(old_duration, this_duration,
-                               max_jobs_exceeded, out_of_configs, exception_caught)
+        self._shutdown_message(state)
+        self.run_state = None
 
 
     def run_sequential(self, evaluator, max_jobs=inf):
@@ -1215,23 +795,34 @@ class Optimiser(object):
         max_jobs: the maximum number of jobs to allow for this run (not in total)
         '''
         try:
+            self._stop_flag.clear()
             self._log('starting sequential optimisation...')
 
-            self._stop_flag.clear()
-            run_start_time = time.time()
-            old_duration = self.duration # duration as-of the start of this run
-            num_jobs = 0 # count number of jobs this run
+            class SequentialRunState:
+                def __init__(self, optimiser, max_jobs):
+                    self.start_time = time.time()
+                    self.old_duration = optimiser.duration # duration as-of the start of this run
+                    self.max_jobs = max_jobs
 
-            # flags to diagnose the stopping conditions
-            out_of_configs = False
-            exception_caught = False
+                    self.finished_this_run = 0
 
-            while not self._stop_flag.is_set() and num_jobs < max_jobs:
+                    # flags to diagnose the stopping conditions
+                    self.out_of_configs = False
+                    self.exception_caught = False
+
+                def run_time(self):
+                    return time.time() - self.start_time
+            state = SequentialRunState(self, max_jobs)
+            self.run_state = state
+
+
+            while not self._wants_to_stop(state):
                 self._handle_checkpoint() # save a checkpoint if signalled to
-                self._wait_for_ready()
+                assert self._ready_for_next_configuration(), \
+                    'not ready for the next configuration in sequential optimisation'
                 job = self._next_job()
                 if job is None:
-                    out_of_configs = True
+                    state.out_of_configs = True
                     break
 
                 evaluation_start = time.time()
@@ -1240,20 +831,17 @@ class Optimiser(object):
 
                 self._process_job_results(job, results)
 
-                num_jobs += 1
-                self.duration = old_duration + (time.time()-run_start_time)
+                state.finished_this_run += 1
+                self.duration = state.old_duration + state.run_time()
 
         except Exception as e:
             self._log('Exception raised during run:\n{}'.format(exception_string()))
-            exception_caught = True
+            state.exception_caught = True
             ON_EXCEPTION(e)
 
         self._handle_checkpoint() # save a checkpoint if signalled to
-
-        this_duration = time.time() - run_start_time
-        max_jobs_exceeded = num_jobs >= max_jobs
-        self._shutdown_message(old_duration, this_duration,
-                               max_jobs_exceeded, out_of_configs, exception_caught)
+        self._shutdown_message(state)
+        self.run_state = None
 
     def run_multithreaded(self, evaluators, max_jobs=inf):
         '''
@@ -1491,6 +1079,12 @@ class Optimiser(object):
         if filename is not None:
             self.checkpoint_filename = filename
         self._checkpoint_flag.set()
+
+    def _handle_checkpoint(self):
+        if self._checkpoint_flag.is_set():
+            self._log('saving checkpoint to "{}"'.format(self.checkpoint_filename))
+            self.save_now()
+            self._checkpoint_flag.clear()
 
     def save_now(self, filename=None):
         '''
@@ -1909,8 +1503,9 @@ class BayesianOptimisationOptimiser(Optimiser):
         if gp_params is None:
             self.gp_params = dict(
                 alpha = 1e-5, # larger => more noise. Default = 1e-10
-                # the default kernel
-                kernel = 1.0 * gp.kernels.RBF(length_scale=1.0, length_scale_bounds="fixed"),
+                # nu=1.5 assumes the target function is once-differentiable
+                kernel = 1.0 * gp.kernels.Matern(nu=1.5),
+                #kernel = 1.0 * gp.kernels.RBF(),
                 n_restarts_optimizer = 10,
                 # make the mean 0 (theoretically a bad thing, see docs, but can help)
                 normalize_y = True,
@@ -2077,9 +1672,9 @@ class BayesianOptimisationOptimiser(Optimiser):
             starting_point = make2D_row(starting_points[j])
 
             # result is an OptimizeResult object
-            # if something goes wrong, scikit will write a warning to stderr by
-            # default. Instead capture the warnings and log them
-            with warnings.catch_warnings(record=True) as w:
+            # note: nested WarningCatchers work as expected
+            log_warning = lambda warn: self._log('warning when maximising the acquisition function: {}'.format(warn))
+            with WarningCatcher(log_warning):
                 result = scipy.optimize.minimize(
                     fun=neg_acquisition_function,
                     x0=starting_point,
@@ -2087,9 +1682,6 @@ class BayesianOptimisationOptimiser(Optimiser):
                     method='L-BFGS-B', # Limited-Memory Broyden-Fletcher-Goldfarb-Shanno Bounded
                     options=dict(maxiter=15000) # maxiter=15000 is default
                 )
-                if len(w) > 0:
-                    for warn in w:
-                        self._log('warning when maximising the acquisition function: {}'.format(warn))
             if not result.success:
                 self._log('restart {}/{} of negative acquisition minimisation failed'.format(
                     j, starting_points.shape[0]))
@@ -2161,27 +1753,27 @@ class BayesianOptimisationOptimiser(Optimiser):
         # still sensible even with the warning, so ignoring it should be fine.
         # Worst case scenario is that a few bad samples are taken before the GP
         # sorts itself out again.
-        with warnings.catch_warnings(record=True) as w:
+        # warnings may be triggered for fitting or predicting
+        log_warning = lambda warn: self._log('warning with the gp: {}'.format(warn))
+        #log_warning = lambda warn: print(warn)
+        with WarningCatcher(log_warning):
             # NOTE: fitting only optimises _certain_ kernel parameters with given
             # bounds, see gp_model.kernel_.theta for the optimised kernel
             # parameters.
             # NOTE: RBF(...) has NO parameters to optimise, however 1.0 * RBF(...) does!
             gp_model.fit(xs, ys)
 
-            if len(w) > 0:
-                for warn in w:
-                    self._log('warning when fitting the gp: {}'.format(warn))
+            # gp_model.kernel_ is a copy of gp_model.kernel with the parameters optimised
+            #self._log('GP params={}'.format(gp_model.kernel_.theta))
 
-        # gp_model.kernel_ is a copy of gp_model.kernel with the parameters optimised
-        #self._log('GP params={}'.format(gp_model.kernel_.theta))
+            # best known configuration and the corresponding cost of that configuration
+            best_sample = self.best_sample()
 
-        # best known configuration and the corresponding cost of that configuration
-        best_sample = self.best_sample()
+            next_x, next_ac = self._maximise_acquisition(gp_model, best_sample.cost)
 
-        next_x, next_ac = self._maximise_acquisition(gp_model, best_sample.cost)
+            # next_x as chosen by the acquisition function maximisation (for the step log)
+            argmax_acquisition = next_x
 
-        # next_x as chosen by the acquisition function maximisation (for the step log)
-        argmax_acquisition = next_x
 
         # maximising the acquisition function failed
         if next_x is None:
@@ -2204,7 +1796,8 @@ class BayesianOptimisationOptimiser(Optimiser):
         if self.allow_parallel:
             # use the GP to estimate the cost of the configuration, later jobs
             # can use this guess to determine where to sample next
-            est_cost = gp_model.predict(self.config_to_point(next_x))
+            with WarningCatcher(log_warning):
+                est_cost = gp_model.predict(self.config_to_point(next_x))
             est_cost = np.asscalar(est_cost) # ndarray of shape=(1,1) is returned from predict()
             self.hypothesised_samples.append((job_num, Sample(next_x, est_cost)))
 
@@ -2832,15 +2425,21 @@ class LogMonitor:
     the given file.
     return a flag which will stop the monitor when set
     '''
+    counter = 0
     def __init__(self, loggable, f):
         '''
         f: a filename or file object (eg open(..., 'w') or sys.stdout)
         '''
         self.stop_flag = threading.Event()
         self.loggable = loggable
+        if LogMonitor.counter > 0:
+            f += str(LogMonitor.counter)
         self.f = open(f, 'w') if isinstance(f, str) else f
+        LogMonitor.counter += 1
     def listen_async(self):
         t = threading.Thread(target=self.listen, name='LogMonitor')
+        # don't wait the threads to finish, just kill it when the program exits
+        t.setDaemon(True)
         t.start()
     def listen(self):
         self.stop_flag.clear()
