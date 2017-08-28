@@ -17,6 +17,7 @@ if running_in_ipython():
 # Other imports
 import ipywidgets as widgets
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D # for matplotlib 3D plots
 
 
 def surface3D(x, y, z, tooltips=None, axes_names=['x','y','z'], log_axes=(False,False,False)):
@@ -108,6 +109,14 @@ def scatter3D(x,y,z, interactive=False, color_by='z', markersize=5, tooltips=Non
         widgets.interact(plot, val=slider)
     else:
         py.iplot(fig, show_link=False)
+
+def MPL_surface3D(X, Y, Z):
+    # note: use %matplotlib tk to open 3D plots interactively
+    fig = plt.figure(figsize=(16,10))
+    ax = fig.gca(projection='3d')
+    surf = ax.plot_surface(X, Y, Z, cmap='plasma', linewidth=0, antialiased=True)
+    fig.colorbar(surf)
+    plt.show()
 
 def plotFromMPL():
     '''

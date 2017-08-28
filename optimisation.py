@@ -20,6 +20,7 @@ from itertools import groupby
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+import matplotlib.ticker as ticker
 
 # for Bayesian Optimisation
 import sklearn.gaussian_process as gp
@@ -752,6 +753,40 @@ class Optimiser(object):
         for val, samples in groupby(sorted(self.samples, key=params_key), params_key):
             data.append((val, list(samples)))
         return data
+
+    def plot_cost_over_time(self, plot_each=True, plot_best=True, true_best=None):
+        '''
+        plot a line graph showing the progress that the optimiser makes towards
+        the optimum as the number of samples increases.
+        plot_each: plot the cost of each sample
+        plot_best: plot the running-best cost
+        true_best: if available: plot a horizontal line for the best possible cost
+        '''
+        fig, ax = plt.subplots(figsize=(16, 10)) # inches
+
+        xs = range(1, len(self.samples)+1)
+        costs = [s.cost for s in self.samples]
+
+        if true_best is not None:
+            ax.axhline(true_best, color='black', label='true best')
+
+        if plot_best:
+            chooser = max if self.maximise_cost else min
+            best_cost = [chooser(costs[:x]) for x in xs]
+            ax.plot(xs, best_cost, color='#55a868', label='best cost')
+
+        if plot_each:
+            ax.plot(xs, costs, color='#4c72b0', label='cost')
+
+        ax.set_title('Cost Over Time')
+        ax.set_xlabel('samples')
+        ax.set_ylabel('cost')
+        ax.margins(0.0, 0.15)
+        if len(self.samples) < 50:
+            ax.xaxis.set_major_locator(ticker.MultipleLocator(2.0))
+        ax.legend()
+
+        return fig
 
     def plot_param(self, param_name, plot_boxplot=True, plot_samples=True,
                    plot_means=True, log_axes=(False, False)):
@@ -1911,6 +1946,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         points[:,param_index] = xs
         return points
 
+    #TODO: rename to plot1D
     def plot_step_slice(self, param, step, true_cost=None, log_ac=False,
                         n_sigma=2, gp_through_all=True):
         '''
@@ -1978,16 +2014,14 @@ class BayesianOptimisationOptimiser(Optimiser):
             ax1.plot(all_xs, ys, 'k--', label='true cost')
 
         ### Plot Samples
-        # get the value for the parameter 'param' from the given point
-        param_from_point = lambda p: self.point_to_config(make2D_row(p))[param]
+        param_index = self._index_for_param(param)
         # plot samples projected onto the `param` axis
-        # reshape needed because using x in sx reduces each row to a 1D array
-        sample_xs = [param_from_point(x) for x in s.sx]
+        sample_xs = [x[param_index] for x in s.sx]
         ax1.plot(sample_xs, s.sy, 'bo', label='samples')
 
         if len(s.hx) > 0:
             # there are some hypothesised samples
-            hypothesised_xs = [param_from_point(x) for x in s.hx]
+            hypothesised_xs = [x[param_index] for x in s.hx]
             ax1.plot(hypothesised_xs, s.hy, 'o', color='tomato', label='hypothesised samples')
 
         # index of the best current real sample
@@ -2049,7 +2083,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         ax1.axvline(x=s.next_x[param])
 
         if s.chosen_at_random and s.argmax_acquisition is not None:
-            ax1.axvline(x=self.point_to_config(s.argmax_acquisition)[param], color='y')
+            ax1.axvline(x=s.argmax_acquisition[0,param_index], color='y')
 
         ax1.legend()
 
@@ -2088,7 +2122,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         # of the acquisition function suggested as the next configuration to
         # test. So plot both.
         if s.chosen_at_random and s.argmax_acquisition is not None:
-            ac_x = self.point_to_config(s.argmax_acquisition)[param]
+            ac_x = s.argmax_acquisition[0,param_index]
             label='$\\mathrm{{argmax}}\\; {}$'.format(self.acquisition_function_name)
             ax2.axvline(x=ac_x, color='y', label=label)
 
@@ -2111,6 +2145,8 @@ class BayesianOptimisationOptimiser(Optimiser):
         # all combinations of x and y values, each point as a row
         all_combos = np.vstack([X.ravel(), Y.ravel()]).T # ravel squashes to 1D
         grid_size = X.shape # both X and Y have shape=(len xs, len ys)
+        # extent = [left, right, bottom, top]
+        extent = list(self.range_bounds[x_param] + self.range_bounds[y_param])
 
         # combination of the true samples (sx, sy) and the hypothesised samples
         # (hx, hy) if there are any
@@ -2119,8 +2155,25 @@ class BayesianOptimisationOptimiser(Optimiser):
 
         fig = plt.figure(figsize=(16, 16)) # inches
         grid = gridspec.GridSpec(nrows=2, ncols=2)
-        ax1, ax2 = fig.add_subplot(grid[0]), fig.add_subplot(grid[1])
+        # layout:
+        # ax1 ax2
+        # ax3 ax4
+        ax1      = fig.add_subplot(grid[0])
         ax3, ax4 = fig.add_subplot(grid[2]), fig.add_subplot(grid[3])
+        ax2 = fig.add_subplot(grid[1]) if true_cost is not None else None
+        axes = [ax1, ax2, ax3, ax4] if true_cost is not None else [ax1, ax3, ax4]
+
+        for ax in axes:
+            ax.set_xlim(self.range_bounds[x_param])
+            ax.set_ylim(self.range_bounds[y_param])
+            ax.grid(False)
+
+        # need to specify rect so that the suptitle isn't cut off
+        fig.tight_layout(rect=[0, 0, 1, 0.96]) # [left, bottom, right, top] 0-1
+
+        fig.suptitle('Bayesian Optimisation step {}{}'.format(
+            step-self.pre_samples,
+            (' (chosen at random)' if s.chosen_at_random else '')), fontsize=20)
 
         config = s.next_x # plot the GP through this config
         # points with all but the chosen parameter fixed to match the given
@@ -2128,18 +2181,70 @@ class BayesianOptimisationOptimiser(Optimiser):
         perturbed = self._points_vary_one(config, x_param, all_combos[:,0])
         y_index = self._index_for_param(y_param)
         perturbed[:,y_index] = all_combos[:,1]
+
         mus, sigmas = s.gp.predict(perturbed, return_std=True)
         mus = mus.flatten()
+        ac = self.acquisition_function(perturbed, s.gp, self.maximise_cost,
+                                       s.best_sample.cost,
+                                       **self.acquisition_function_params)
 
-        ax1.set_title('surrogate $\\mu$')
+        x_param_index = self._index_for_param(x_param)
+        y_param_index = self._index_for_param(y_param)
+        # plot samples projected onto the `x_param` and `y_param' axes
+        sample_xs = [x[x_param_index] for x in s.sx]
+        sample_ys = [x[y_param_index] for x in s.sx]
+
+        if len(s.hx) > 0:
+            # there are some hypothesised samples
+            hypothesised_xs = [x[x_param_index] for x in s.hx]
+            hypothesised_ys = [x[y_param_index] for x in s.hx]
+
+        next_x, next_y = s.next_x[x_param], s.next_x[y_param]
+
+        best_i = np.argmax(s.sy) if self.maximise_cost else np.argmin(s.sy)
+        best_x, best_y = sample_xs[best_i], sample_ys[best_i]
+
+        def plot_heatmap(ax, data, colorbar):
+            im = ax.imshow(data, cmap='viridis', interpolation='nearest', origin='lower', extent=extent)
+            if colorbar:
+                c = fig.colorbar(im, ax=ax)
+                c.set_label('cost')
+            ax.set_xlabel('parameter {}'.format(x_param))
+            ax.set_ylabel('parameter {}'.format(y_param))
+            ax.plot(best_x, best_y, '*', markersize=15,
+                 color='deepskyblue', zorder=10, linestyle='None', label='best sample')
+            ax.plot(sample_xs, sample_ys, 'ro', markersize=4, linestyle='None', label='samples')
+            if len(s.hx) > 0:
+                ax1.plot(hypothesised_xs, hypothesised_ys, 'o', color='tomato',
+                         linestyle='None', label='hypothesised samples')
+
+            ax.plot(next_x, next_y, marker='d', color='orangered',
+                    markeredgecolor='black', markeredgewidth=1.5, markersize=10,
+                    linestyle='None', label='next sample')
+
+
+        ax1.set_title('Surrogate $\\mu$')
         mus = mus.reshape(*grid_size)
-        ax1.imshow(mus, cmap='viridis', interpolation='nearest')
+        im = plot_heatmap(ax1, mus, colorbar=True)
 
-        ax1.set_title('surrogate $\\mu$')
+        ax3.set_title('Surrogate $\\sigma$')
         sigmas = sigmas.reshape(*grid_size)
-        ax3.imshow(sigmas, cmap='viridis', interpolation='nearest')
+        plot_heatmap(ax3, sigmas, colorbar=True)
 
-        fig.colorbar()
+        if true_cost is not None:
+            ax2.set_title('True Cost')
+            plot_heatmap(ax2, true_cost, colorbar=True)
+
+        ax4.set_title('Acquisition Function')
+        ac = ac.reshape(*grid_size)
+        plot_heatmap(ax4, ac, colorbar=True)
+
+        if s.chosen_at_random and s.argmax_acquisition is not None:
+            label='$\\mathrm{{argmax}}\\; {}$'.format(self.acquisition_function_name)
+            ax4.axhline(y=s.argmax_acquisition[0,y_param_index], color='y', label=label)
+            ax4.axvline(x=s.argmax_acquisition[0,x_param_index], color='y')
+
+        ax4.legend(bbox_to_anchor=(0, 1.01), loc='lower left', borderaxespad=0.0)
 
         return fig
 

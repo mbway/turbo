@@ -499,7 +499,7 @@ class DebugGUIs(qtc.QObject):
         self.op_counter = 1
         self.ev_counter = 1
         self.ready = threading.Event()
-        self.app_thread = threading.Thread(target=self._start)
+        self.app_thread = threading.Thread(target=self._start, name='DebugGUIs')
         self.app_thread.setDaemon(True)
         self.app_thread.start()
         self.ready.wait()
