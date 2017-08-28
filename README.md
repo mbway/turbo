@@ -1,5 +1,24 @@
 # README #
 
+# Comparison of optimisation.py with other Bayesian Optimisation libraries #
+
+## Features (some unique)
+- parallel optimisation (multiple evaluations at once) with hypothesised samples
+- client/server architecture allowing for massively parallel optimisation
+- checkpoints and plotting each step of optimisation
+    - the GP is saved exactly so another GP does not have to be trained for plotting (which may fit differently to the GP used during the algorithm)
+- ability to save extra data along with the cost of a particular configuration for later analysis (eg can keep the predictions made by the trained model for plotting later)
+- configurable 'closeness' parameter for choosing randomly (other libraries choose randomly only on almost exact duplicates)
+- able to treat some parameters as being scaled logarithmically (where the order of magnitude matters more than the value). Support for plotting logarithmic parameters and support from the optimisers (Bayesian optimisation trains the GP on the exponents of the logarithmic values and log-linear sampling for randomly chosen samples)
+
+## https://github.com/fmfn/BayesianOptimization
+TODO
+
+## https://github.com/thuijskens/bayesian-optimization
+TODO
+
+
+
 # Contents (in chronological order) #
 First I experimented with tensorflow and Jupyter, then a simple MC-dropout implementation
 - Linear Regression.ipynb
@@ -55,3 +74,7 @@ I then started an optimisation framework and interactive 3D plotting tools
 - Gaussian process
     - http://www.gaussianprocess.org/gpml/chapters/
 
+
+# Dependencies #
+- install dependencies with pip:
+- `pip3 install jupyter numpy matplotlib sklearn scipy plotly`

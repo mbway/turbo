@@ -79,15 +79,17 @@ class Sample(object):
     a sample is a configuration and its corresponding cost as determined by an
     evaluator. Potentially also stores information of interest in 'extra'.
     '''
-    def __init__(self, config, cost, extra=None):
+    def __init__(self, config, cost, extra=None, job_num=None):
         '''
         extra: miscellaneous information about the sample. Not used by the
             optimiser but can be used to store useful information for later. The
             extra information will be saved along with the rest of the sample data.
+        job_num: the job number which the sample was evaluated for
         '''
         self.config = config
         self.cost = cost
         self.extra = {} if extra is None else extra
+        self.job_num = job_num
     def __repr__(self):
         ''' used in unit tests '''
         if self.extra: # not empty
@@ -383,6 +385,8 @@ class Optimiser(object):
         check the results of the job are valid, record them and post to the log
         '''
         samples = Evaluator.samples_from_test_results(results, job.config)
+        for s in samples:
+            s.job_num = job.num
         self.samples.extend(samples)
         self.num_finished_jobs += 1
         self.finished_job_ids.add(job.num)
@@ -778,12 +782,14 @@ class Optimiser(object):
         if plot_each:
             ax.plot(xs, costs, color='#4c72b0', label='cost')
 
-        ax.set_title('Cost Over Time')
+        ax.set_title('Cost Over Time', fontsize=14)
         ax.set_xlabel('samples')
         ax.set_ylabel('cost')
         ax.margins(0.0, 0.15)
         if len(self.samples) < 50:
             ax.xaxis.set_major_locator(ticker.MultipleLocator(2.0))
+        elif len(self.samples) < 100:
+            ax.xaxis.set_major_locator(ticker.MultipleLocator(5.0))
         ax.legend()
 
         return fig
@@ -916,7 +922,6 @@ class Optimiser(object):
 
     def _handle_checkpoint(self):
         if self._checkpoint_flag.is_set():
-            self._log('saving checkpoint to "{}"'.format(self.checkpoint_filename))
             self.save_now()
             self._checkpoint_flag.clear()
 
@@ -1205,8 +1210,8 @@ class BayesianOptimisationOptimiser(Optimiser):
         gp_params: parameter dictionary for the Gaussian Process surrogate
             function, None will choose some sensible defaults. (See "sklearn
             gaussian process regressor")
-        pre_samples: the number of samples to be taken randomly before starting
-            Bayesian optimisation
+        pre_samples: the number of jobs (not samples, despite the name) to run
+            before starting Bayesian optimisation
         ac_max_params: parameters for maximising the acquisition function. None
             to use default values, or a dictionary  with integer values for:
                 'num_random': number of random samples to take when maximising
@@ -1265,13 +1270,14 @@ class BayesianOptimisationOptimiser(Optimiser):
 
         if gp_params is None:
             self.gp_params = dict(
-                alpha = 1e-5, # larger => more noise. Default = 1e-10
+                alpha = 1e-10, # larger => more noise. Default = 1e-10
                 # nu=1.5 assumes the target function is once-differentiable
-                kernel = 1.0 * gp.kernels.Matern(nu=1.5),
+                kernel = 1.0 * gp.kernels.Matern(nu=1.5) + gp.kernels.WhiteKernel(),
                 #kernel = 1.0 * gp.kernels.RBF(),
-                n_restarts_optimizer = 10,
+                n_restarts_optimizer = 5,
                 # make the mean 0 (theoretically a bad thing, see docs, but can help)
-                normalize_y = True,
+                # with the constant offset in the kernel this shouldn't be required
+                #normalize_y = True,
                 copy_X_train = True # whether to make a copy of the training data (in-case it is modified)
             )
         else:
@@ -2015,13 +2021,15 @@ class BayesianOptimisationOptimiser(Optimiser):
 
         ### Plot Samples
         param_index = self._index_for_param(param)
+        # if logarithmic: value stored as exponent
+        get_param = lambda p: np.exp(p[param_index]) if is_log else p[param_index]
         # plot samples projected onto the `param` axis
-        sample_xs = [x[param_index] for x in s.sx]
+        sample_xs = [get_param(x) for x in s.sx]
         ax1.plot(sample_xs, s.sy, 'bo', label='samples')
 
         if len(s.hx) > 0:
             # there are some hypothesised samples
-            hypothesised_xs = [x[param_index] for x in s.hx]
+            hypothesised_xs = [get_param(x) for x in s.hx]
             ax1.plot(hypothesised_xs, s.hy, 'o', color='tomato', label='hypothesised samples')
 
         # index of the best current real sample
@@ -2031,10 +2039,13 @@ class BayesianOptimisationOptimiser(Optimiser):
 
 
         ### Plot Surrogate Function
-        def plot_gp_prediction_through(config, mu_label, sigma_label, mu_alpha, sigma_alpha):
+        def plot_gp_prediction_through(config, mu_label, sigma_label, mu_alpha,
+                                       sigma_alpha):
+            # if logarithmic: the GP is trained on the exponents of the values
+            gp_xs = np.log(all_xs) if is_log else all_xs
             # points with all but the chosen parameter fixed to match the given
             # config, but the chosen parameter varies
-            perturbed = self._points_vary_one(config, param, all_xs)
+            perturbed = self._points_vary_one(config, param, gp_xs)
             mus, sigmas = s.gp.predict(perturbed, return_std=True)
             mus = mus.flatten()
             ax1.plot(all_xs, mus, 'm-', label=mu_label, alpha=mu_alpha)
@@ -2069,7 +2080,8 @@ class BayesianOptimisationOptimiser(Optimiser):
                     param_zeroed = np.append(param_zeroed, x_zeroed, axis=0)
 
             if len(configs_to_use) > 0:
-                alpha = 0.4/len(configs_to_use)
+                # cap to make sure they don't become invisible
+                alpha = max(0.4/len(configs_to_use), 0.015)
                 for cfg in configs_to_use:
                     plot_gp_prediction_through(cfg,
                         mu_label=None, sigma_label=None,
@@ -2083,7 +2095,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         ax1.axvline(x=s.next_x[param])
 
         if s.chosen_at_random and s.argmax_acquisition is not None:
-            ax1.axvline(x=s.argmax_acquisition[0,param_index], color='y')
+            ax1.axvline(x=get_param(s.argmax_acquisition[0]), color='y')
 
         ax1.legend()
 
@@ -2093,8 +2105,10 @@ class BayesianOptimisationOptimiser(Optimiser):
 
         ### Plot Acquisition Function
         # it makes sense to plot the acquisition function through the slice
-        # corresponding to the next point to be chosen
-        perturbed = self._points_vary_one(s.next_x, param, all_xs)
+        # corresponding to the next point to be chosen.
+        # if logarithmic: the GP is trained on the exponents of the values
+        gp_xs = np.log(all_xs) if is_log else all_xs
+        perturbed = self._points_vary_one(s.next_x, param, gp_xs)
         ac = self.acquisition_function(perturbed, s.gp, self.maximise_cost,
                                        s.best_sample.cost,
                                        **self.acquisition_function_params)
@@ -2122,7 +2136,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         # of the acquisition function suggested as the next configuration to
         # test. So plot both.
         if s.chosen_at_random and s.argmax_acquisition is not None:
-            ac_x = s.argmax_acquisition[0,param_index]
+            ac_x = get_param(s.argmax_acquisition[0])
             label='$\\mathrm{{argmax}}\\; {}$'.format(self.acquisition_function_name)
             ax2.axvline(x=ac_x, color='y', label=label)
 
@@ -2130,23 +2144,53 @@ class BayesianOptimisationOptimiser(Optimiser):
 
         return fig
 
-    def plot_step_2D(self, x_param, y_param, step, true_cost=None):
+    def plot_step_2D(self, x_param, y_param, step, true_cost=None,
+                     plot_through='next', force_view_linear=False):
+        '''
+        x_param: the name of the parameter to place along the x axis
+        y_param: the name of the parameter to place along the y axis
+        step: the step number to plot
+        true_cost: a function (that takes x and y arguments) or meshgrid
+            containing the true cost values
+        plot_through: unlike the 1D step plotting, in 2D the heatmaps cannot be
+            easily overlaid to get a better understanding of the whole space.
+            Instead, a Sample object can be provided to vary x_pram and y_param
+            but leave the others constant to produce the graphs.
+            Pass 'next' to signify the next sample (the one chosen by the
+            current step) or 'best' to signify the current best sample as-of the
+            current step.
+        force_view_linear: force the images to be displayed with linear axes
+            even if the parameters are logarithmic
+        '''
         assert step in self.step_log.keys(), 'step not recorded in the log'
 
         x_type, y_type = self.range_types[x_param], self.range_types[y_param]
         assert all(type_ in [RangeType.Linear, RangeType.Logarithmic]
                    for type_ in [x_type, y_type])
-
-        #TODO: handle log parameters
+        x_is_log = x_type == RangeType.Logarithmic
+        y_is_log = y_type == RangeType.Logarithmic
 
         s = dotdict(self.step_log[step])
+
+        if plot_through == 'next':
+            plot_through = s.next_x
+        elif plot_through == 'best':
+            plot_through = self.config_to_point(s.best_sample.config)
+        elif isinstance(plot_through, Sample):
+            plot_through = self.config_to_point(plot_through.config)
+        else:
+            raise ValueError(plot_through)
+
+
         all_xs, all_ys = self.ranges[x_param], self.ranges[y_param]
-        X, Y = np.meshgrid(all_xs, all_ys)
+        # the GP is trained on the exponents of the values if the parameter is logarithmic
+        gp_xs = np.log(all_xs) if x_is_log else all_xs
+        gp_ys = np.log(all_ys) if y_is_log else all_ys
+        gp_X, gp_Y = np.meshgrid(gp_xs, gp_ys)
         # all combinations of x and y values, each point as a row
-        all_combos = np.vstack([X.ravel(), Y.ravel()]).T # ravel squashes to 1D
-        grid_size = X.shape # both X and Y have shape=(len xs, len ys)
-        # extent = [left, right, bottom, top]
-        extent = list(self.range_bounds[x_param] + self.range_bounds[y_param])
+        gp_all_combos = np.vstack([gp_X.ravel(), gp_Y.ravel()]).T # ravel squashes to 1D
+
+        grid_size = gp_X.shape # both X and Y have shape=(len xs, len ys)
 
         # combination of the true samples (sx, sy) and the hypothesised samples
         # (hx, hy) if there are any
@@ -2165,11 +2209,15 @@ class BayesianOptimisationOptimiser(Optimiser):
 
         for ax in axes:
             ax.set_xlim(self.range_bounds[x_param])
+            if x_is_log and not force_view_linear:
+                ax.set_xscale('log')
             ax.set_ylim(self.range_bounds[y_param])
+            if y_is_log and not force_view_linear:
+                ax.set_yscale('log')
             ax.grid(False)
 
         # need to specify rect so that the suptitle isn't cut off
-        fig.tight_layout(rect=[0, 0, 1, 0.96]) # [left, bottom, right, top] 0-1
+        fig.tight_layout(h_pad=4, w_pad=8, rect=[0, 0, 1, 0.96]) # [left, bottom, right, top] 0-1
 
         fig.suptitle('Bayesian Optimisation step {}{}'.format(
             step-self.pre_samples,
@@ -2178,9 +2226,9 @@ class BayesianOptimisationOptimiser(Optimiser):
         config = s.next_x # plot the GP through this config
         # points with all but the chosen parameter fixed to match the given
         # config, but the focused parameters vary
-        perturbed = self._points_vary_one(config, x_param, all_combos[:,0])
+        perturbed = self._points_vary_one(config, x_param, gp_all_combos[:,0])
         y_index = self._index_for_param(y_param)
-        perturbed[:,y_index] = all_combos[:,1]
+        perturbed[:,y_index] = gp_all_combos[:,1]
 
         mus, sigmas = s.gp.predict(perturbed, return_std=True)
         mus = mus.flatten()
@@ -2190,14 +2238,18 @@ class BayesianOptimisationOptimiser(Optimiser):
 
         x_param_index = self._index_for_param(x_param)
         y_param_index = self._index_for_param(y_param)
+        # if logarithmic: value stored as exponent
+        get_x_param = lambda p: np.exp(p[x_param_index]) if x_is_log else p[x_param_index]
+        get_y_param = lambda p: np.exp(p[y_param_index]) if y_is_log else p[y_param_index]
+
         # plot samples projected onto the `x_param` and `y_param' axes
-        sample_xs = [x[x_param_index] for x in s.sx]
-        sample_ys = [x[y_param_index] for x in s.sx]
+        sample_xs = [get_x_param(x) for x in s.sx]
+        sample_ys = [get_y_param(x) for x in s.sx]
 
         if len(s.hx) > 0:
             # there are some hypothesised samples
-            hypothesised_xs = [x[x_param_index] for x in s.hx]
-            hypothesised_ys = [x[y_param_index] for x in s.hx]
+            hypothesised_xs = [get_x_param(x) for x in s.hx]
+            hypothesised_ys = [get_y_param(x) for x in s.hx]
 
         next_x, next_y = s.next_x[x_param], s.next_x[y_param]
 
@@ -2205,9 +2257,15 @@ class BayesianOptimisationOptimiser(Optimiser):
         best_x, best_y = sample_xs[best_i], sample_ys[best_i]
 
         def plot_heatmap(ax, data, colorbar):
-            im = ax.imshow(data, cmap='viridis', interpolation='nearest', origin='lower', extent=extent)
+            # pcolormesh is better than imshow because: no need to fiddle around
+            # with extents and aspect ratios because the x and y values can be
+            # fed in and so just works. This also prevents the problem of the
+            # origin being in the wrong place. It is compatible with log scaled
+            # axes unlike imshow. There is no interpolation by default unlike
+            # imshow.
+            im = ax.pcolormesh(all_xs, all_ys, data, cmap='viridis')
             if colorbar:
-                c = fig.colorbar(im, ax=ax)
+                c = fig.colorbar(im, ax=ax, pad=0.01, fraction=0.051)
                 c.set_label('cost')
             ax.set_xlabel('parameter {}'.format(x_param))
             ax.set_ylabel('parameter {}'.format(y_param))
@@ -2222,29 +2280,90 @@ class BayesianOptimisationOptimiser(Optimiser):
                     markeredgecolor='black', markeredgewidth=1.5, markersize=10,
                     linestyle='None', label='next sample')
 
+        title_size = 16
 
-        ax1.set_title('Surrogate $\\mu$')
+        ax1.set_title('Surrogate $\\mu$', fontsize=title_size)
         mus = mus.reshape(*grid_size)
         im = plot_heatmap(ax1, mus, colorbar=True)
 
-        ax3.set_title('Surrogate $\\sigma$')
+        ax3.set_title('Surrogate $\\sigma$', fontsize=title_size)
         sigmas = sigmas.reshape(*grid_size)
         plot_heatmap(ax3, sigmas, colorbar=True)
 
         if true_cost is not None:
-            ax2.set_title('True Cost')
+            ax2.set_title('True Cost', fontsize=title_size)
             plot_heatmap(ax2, true_cost, colorbar=True)
 
-        ax4.set_title('Acquisition Function')
+        ax4.set_title('Acquisition Function', fontsize=title_size)
         ac = ac.reshape(*grid_size)
         plot_heatmap(ax4, ac, colorbar=True)
 
         if s.chosen_at_random and s.argmax_acquisition is not None:
             label='$\\mathrm{{argmax}}\\; {}$'.format(self.acquisition_function_name)
-            ax4.axhline(y=s.argmax_acquisition[0,y_param_index], color='y', label=label)
-            ax4.axvline(x=s.argmax_acquisition[0,x_param_index], color='y')
+            ax4.axhline(y=get_y_param(s.argmax_acquisition[0]), color='y', label=label)
+            ax4.axvline(x=get_x_param(s.argmax_acquisition[0]), color='y')
 
         ax4.legend(bbox_to_anchor=(0, 1.01), loc='lower left', borderaxespad=0.0)
+
+        return fig
+
+    def num_randomly_chosen(self):
+        count = 0
+        for s in self.samples:
+            is_pre_sample = s.job_num <= self.pre_samples
+            is_random = s.job_num in self.step_log.keys() and self.step_log[s.job_num]['chosen_at_random']
+            if is_pre_sample or is_random:
+                count += 1
+        return count
+
+    def plot_cost_over_time(self, plot_each=True, plot_best=True,
+                            true_best=None, plot_random=True):
+        '''
+        plot a line graph showing the progress that the optimiser makes towards
+        the optimum as the number of samples increases.
+        plot_each: plot the cost of each sample
+        plot_best: plot the running-best cost
+        true_best: if available: plot a horizontal line for the best possible cost
+        plot_random: whether to plot markers over the samples which were chosen randomly
+        '''
+        fig = super(BayesianOptimisationOptimiser, self).plot_cost_over_time(plot_each, plot_best, true_best)
+        ax = fig.axes[0]
+
+        if plot_random:
+            random_sample_nums = []
+            random_sample_costs = []
+            for i, s in enumerate(self.samples):
+                is_pre_sample = s.job_num <= self.pre_samples
+                is_random = s.job_num in self.step_log.keys() and self.step_log[s.job_num]['chosen_at_random']
+                if is_pre_sample or is_random:
+                    random_sample_nums.append(i+1)
+                    random_sample_costs.append(s.cost)
+            ax.plot(random_sample_nums, random_sample_costs, 'ro', markersize=5, label='randomly chosen')
+            ax.margins(0.0, 0.18)
+            ax.legend()
+
+        def sample_num_to_bayes_step(s_num):
+            i = int(s_num)-1
+            if i >= 0 and i < len(self.samples):
+                s = self.samples[i]
+                if s.job_num in self.step_log.keys():
+                    return s.job_num - self.pre_samples
+                else:
+                    return ''
+            else:
+                return ''
+        labels = [sample_num_to_bayes_step(s_num) for s_num in ax.get_xticks()]
+
+        ax2 = ax.twiny() # 'twin y'
+        ax2.grid(False)
+        ax2.set_xlim(ax.get_xlim())
+        ax2.xaxis.set_major_locator(ax.xaxis.get_major_locator())
+        # convert the labels marked on ax into new labels for the top
+        ax2.set_xticklabels(labels)
+        ax2.set_xlabel('Bayesian Step')
+
+        # raise the title to get out of the way of ax2
+        ax.title.set_position([0.5, 1.08])
 
         return fig
 

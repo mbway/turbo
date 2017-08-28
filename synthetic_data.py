@@ -21,6 +21,83 @@ def make2D(arr):
     '''
     return arr.reshape(-1, 1)
 
+class Noise1D:
+    '''
+    create and store an array of noise which can be accessed deterministically
+    with get().
+    '''
+    def __init__(self, xs, sigma):
+        self.xs = xs
+        if sigma == 0.0:
+            self.noise = np.zeros(shape=(len(xs)))
+        else:
+            self.noise = np.random.normal(0, sigma, size=(len(xs)))
+    def get(self, x):
+        '''
+        get the noise value for the given x value
+        if x is an array of values, then apply to each value in the array.
+        note: this should hold:
+            np.all(self.noise == self.get(self.xs))
+        '''
+        if isinstance(x, np.ndarray):
+            # cannot vectorize if self is an argument
+            @np.vectorize
+            def vec_get(x):
+                return self.noise[self.get_index(x)]
+            return vec_get(x)
+        else:
+            return self.noise[self.get_index(x)]
+    def get_index(self, x):
+        '''
+        get the index into self.noise which is closest to the given x value
+        (based on the fact that entries in self.noise correspond to values of
+        xs passed into the constructor)
+        eg if xs = [1,2,3] then the index for x = 1.2 should be 0 (the index
+        corresponding to x = 1)
+        '''
+        return np.argmin(np.abs(self.xs-x))
+
+class Noise2D:
+    '''
+    create and store a grid of 2D noise which can be accessed deterministically
+    with get().
+    '''
+    def __init__(self, xs, ys, sigma):
+        self.xs = xs
+        self.ys = ys
+        if sigma == 0.0:
+            self.noise = np.zeros(shape=(len(xs), len(ys)))
+        else:
+            self.noise = np.random.normal(0, sigma, size=(len(xs), len(ys)))
+    def get(self, x, y):
+        '''
+        get the noise value for the coordinates x and y.
+        if x and y are meshgrids or arrays of points, then return a meshgrid or
+        array of values with the noise values filled in.
+        note: this should hold:
+            np.all(self.noise == self.get(*np.meshgrid(self.xs, self.ys)))
+        '''
+        if isinstance(x, np.ndarray):
+            # cannot vectorize if self is an argument
+            @np.vectorize
+            def vec_get(x, y):
+                return self.noise[self.get_index(x, y)]
+            return vec_get(x, y)
+        else:
+            return self.noise[self.get_index(x, y)]
+    def get_index(self, x, y):
+        '''
+        get the index into self.noise which is closest to the given x,y
+        coordinate (based on the fact that entries in self.noise correspond to
+        locations of xs and ys passed into the constructor)
+        eg if xs = [1,2,3] then the index for x = 1.2 should be 0 (the index
+        corresponding to x = 1)
+        '''
+        xi, yi = np.argmin(np.abs(self.xs-x)), np.argmin(np.abs(self.ys-y))
+        # noise is indexed as [row, col] so x and y must be swapped
+        return yi, xi
+
+
 def random_covariance_matrix(d, max_variation):
     '''
         based on: https://math.stackexchange.com/a/1879937
@@ -194,7 +271,7 @@ class Data1D:
             self.populated[a:b] = 1.0
 
         print('training GP')
-        kernel = 1.0 * gp.kernels.Matern(length_scale=1) + gp.kernels.WhiteKernel(noise_level=0.3)
+        kernel = 1.0 * gp.kernels.Matern(nu=1.5) + gp.kernels.WhiteKernel()
         gp_params = dict(
             alpha = 1e-10, # noise level
             kernel = kernel,
@@ -217,9 +294,10 @@ class Data1D:
         '''
 
 
-    def plot_samples(self, show_exact=True, show_populated=True, show_gp=True):
+    def plot_samples(self, show_samples=True, show_exact=True, show_populated=True, show_gp=True):
         plt.figure(figsize=(16,8))
-        plt.plot(self.x, self.y, 'b.', label='data')
+        if show_samples:
+            plt.plot(self.x, self.y, 'b.', label='data')
         if show_exact:
             plt.plot(self.full_x, self.full_exact_y, 'g-', label='generator')
         if show_populated:
