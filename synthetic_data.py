@@ -241,13 +241,13 @@ class Data1D:
         return s, y
 
     def __init__(self, f):
-        self.n = 2000 # num samples (including the samples which will be thrown out)
+        self.n = 1666 # num samples (including the samples which will be thrown out)
         nfac = 1 # factor of n to _actually_ use (this is a hack because the
                    # keep_ids are based on the assumption of 2000 samples)
         self.n = self.n * nfac
 
         self.min_x = 0
-        self.max_x = 12
+        self.max_x = 10
 
         self.full_x = make2D(np.linspace(self.min_x, self.max_x, self.n))
         self.s, self.full_exact_y = f(self.full_x)

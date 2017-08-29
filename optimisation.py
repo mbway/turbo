@@ -101,7 +101,8 @@ class Sample(object):
         ''' used in unit tests '''
         return (self.config == other.config and
                 self.cost == other.cost and
-                self.extra == other.extra)
+                self.extra == other.extra and
+                self.job_num == other.job_num)
 
 
 # Details of the network protocol between the optimiser and the evaluator:
@@ -960,7 +961,7 @@ class Optimiser(object):
             filename = name + str(count) + ext
             self._log('writing to "{}" instead'.format(filename))
 
-        save = json.dumps(self._save_dict(), indent=2, sort_keys=True, cls=NumpyJSONEncoder)
+        save = json.dumps(self._save_dict(), sort_keys=True, cls=NumpyJSONEncoder)
         with open(filename, 'w') as f:
             f.write(save)
 
@@ -1000,7 +1001,7 @@ class Optimiser(object):
         if best is None:
             best = Sample({}, inf)
         return {
-            'samples' : [(s.config, s.cost, JSON_encode_binary(s.extra)) for s in self.samples],
+            'samples' : [(s.config, s.cost, JSON_encode_binary(s.extra), s.job_num) for s in self.samples],
             'num_started_jobs' : self.num_started_jobs, # must be equal to num_finished_jobs
             'num_finished_jobs' : self.num_finished_jobs,
             'finished_job_ids' : list(self.finished_job_ids),
@@ -1008,7 +1009,7 @@ class Optimiser(object):
             'log_record' : self.log_record,
             'checkpoint_filename' : self.checkpoint_filename,
             # convenience for viewing the save, but will not be loaded
-            'best_sample' : {'config' : best.config, 'cost' : best.cost, 'extra' : best.extra}
+            'best_sample' : {'config' : best.config, 'cost' : best.cost, 'extra' : best.extra, 'job_num' : best.job_num}
         }
 
     def _load_dict(self, save):
@@ -1016,8 +1017,8 @@ class Optimiser(object):
         load progress from a dictionary
         (designed to be overridden by derived classes in order to load specialised data)
         '''
-        self.samples = [Sample(dotdict(config), cost, JSON_decode_binary(extra))
-                        for config, cost, extra in save['samples']]
+        self.samples = [Sample(dotdict(config), cost, JSON_decode_binary(extra), job_num)
+                        for config, cost, extra, job_num in save['samples']]
         self.num_started_jobs = save['num_started_jobs']
         self.num_finished_jobs = save['num_finished_jobs']
         self.finished_job_ids = set(save['finished_job_ids'])

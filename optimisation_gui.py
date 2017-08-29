@@ -107,6 +107,10 @@ def start_GUI(e_or_o):
 
     sys.exit(app.exec_())
 
+
+def indent(text, indentation=1):
+    return '\n'.join('\t' * indentation + line for line in  text.splitlines())
+
 class LoggableGUI(qt.QWidget):
     def __init__(self):
         super(LoggableGUI, self).__init__()
@@ -182,18 +186,24 @@ class LoggableGUI(qt.QWidget):
 
         self.format_text()
 
-    def _show_raw(self, dict_, exclude):
+    def _raw_string(self, dict_, exclude, expand):
         s = ''
         for k, v in sorted(dict_.items(), key=lambda x: x[0]):
             if k in exclude:
                 s += '{}: skipped\n\n\n'.format(k)
+            elif v is not None and k in expand:
+                s += '{}:\n{}\n\n'.format(k, indent(self._raw_string(v.__dict__, [], [])))
             else:
                 if isinstance(v, threading.Event):
                     v = '{}: set={}'.format(type(v), v.is_set())
-                if isinstance(v, list):
-                    list_str = '[\n' + ',\n'.join([str(x) for x in v]) + '\n]'
+                elif isinstance(v, list):
+                    list_str = '[\n' + ',\n'.join(['\t' + str(x) for x in v]) + '\n]'
                     v = 'len = {}\n{}'.format(len(v), list_str)
                 s += '{}:\n{}\n\n'.format(k, v)
+        return s
+
+    def _show_raw(self, dict_, exclude, expand):
+        s = self._raw_string(dict_, exclude, expand)
         self.raw.setText(s)
         self.raw.show()
 
@@ -278,7 +288,9 @@ class EvaluatorGUI(LoggableGUI):
         self.evaluator_thread.terminate()
 
     def show_raw(self):
-        self._show_raw(self.evaluator.__dict__, exclude=['log_record'])
+        self._show_raw(self.evaluator.__dict__,
+                       exclude=['log_record'],
+                       expand=['run_state'])
 
     def closeEvent(self, event):
         if self.evaluator_thread.isRunning():
@@ -355,7 +367,9 @@ class OptimiserGUI(LoggableGUI):
         self.optimiser_thread.terminate()
 
     def show_raw(self):
-        self._show_raw(self.optimiser.__dict__, exclude=['log_record'])
+        self._show_raw(self.optimiser.__dict__,
+                       exclude=['log_record', 'samples', 'step_log'],
+                       expand=['run_state'])
 
     def save_checkpoint(self):
         filename = self.checkpoint_filename.text()
