@@ -18,6 +18,7 @@ elif sys.version_info[0] == 2: # python 2
 else:
     print('unsupported python version')
 
+import time
 import signal
 import threading
 import io

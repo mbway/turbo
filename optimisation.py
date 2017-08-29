@@ -93,10 +93,10 @@ class Sample(object):
     def __repr__(self):
         ''' used in unit tests '''
         if self.extra: # not empty
-            return '(config={}, cost={}, extra={})'.format(
-                config_string(self.config), self.cost, self.extra)
+            return '(config={}, cost={}, extra={}, job_num={})'.format(
+                config_string(self.config), self.cost, self.extra, self.job_num)
         else:
-            return '(config={}, cost={})'.format(config_string(self.config), self.cost)
+            return '(config={}, cost={}, job_num={})'.format(config_string(self.config), self.cost, self.job_num)
     def __eq__(self, other):
         ''' used in unit tests '''
         return (self.config == other.config and
@@ -143,7 +143,10 @@ class Evaluator(object):
                    timeout=CLIENT_TIMEOUT):
         self._stop_flag.clear()
         self.log('evaluator client starting...')
+        # number of finished evaluations this run
         num_jobs = 0
+        # number of times there have been no jobs available in a row
+        num_rejections = 0
 
         def should_stop():
             return self.wants_to_stop() or num_jobs >= max_jobs
@@ -168,8 +171,12 @@ class Evaluator(object):
                     break
                 elif job == op_net.empty_msg():
                     self.log('no job available')
-                    time.sleep(NON_CRITICAL_WAIT) # not an error, but wait a while
+                    num_rejections += 1
+                    # not an error, but wait a while
+                    time.sleep(min(2 ** num_rejections, 16))
                     continue
+                else:
+                    num_rejections = 0
 
                 job = op_net.decode_JSON(job)
                 self.log('received job: {}'.format(job))
@@ -2257,14 +2264,14 @@ class BayesianOptimisationOptimiser(Optimiser):
         best_i = np.argmax(s.sy) if self.maximise_cost else np.argmin(s.sy)
         best_x, best_y = sample_xs[best_i], sample_ys[best_i]
 
-        def plot_heatmap(ax, data, colorbar):
+        def plot_heatmap(ax, data, colorbar, cmap):
             # pcolormesh is better than imshow because: no need to fiddle around
             # with extents and aspect ratios because the x and y values can be
             # fed in and so just works. This also prevents the problem of the
             # origin being in the wrong place. It is compatible with log scaled
             # axes unlike imshow. There is no interpolation by default unlike
             # imshow.
-            im = ax.pcolormesh(all_xs, all_ys, data, cmap='viridis')
+            im = ax.pcolormesh(all_xs, all_ys, data, cmap=cmap)
             if colorbar:
                 c = fig.colorbar(im, ax=ax, pad=0.01, fraction=0.051)
                 c.set_label('cost')
@@ -2282,22 +2289,25 @@ class BayesianOptimisationOptimiser(Optimiser):
                     linestyle='None', label='next sample')
 
         title_size = 16
+        cmap = 'viridis'
+        # reverse the color map if minimising
+        cmap_match_direction = cmap if self.maximise_cost else cmap + '_r' # reversed
 
         ax1.set_title('Surrogate $\\mu$', fontsize=title_size)
         mus = mus.reshape(*grid_size)
-        im = plot_heatmap(ax1, mus, colorbar=True)
+        im = plot_heatmap(ax1, mus, colorbar=True, cmap=cmap_match_direction)
 
         ax3.set_title('Surrogate $\\sigma$', fontsize=title_size)
         sigmas = sigmas.reshape(*grid_size)
-        plot_heatmap(ax3, sigmas, colorbar=True)
+        plot_heatmap(ax3, sigmas, colorbar=True, cmap=cmap)
 
         if true_cost is not None:
             ax2.set_title('True Cost', fontsize=title_size)
-            plot_heatmap(ax2, true_cost, colorbar=True)
+            plot_heatmap(ax2, true_cost, colorbar=True, cmap=cmap_match_direction)
 
         ax4.set_title('Acquisition Function', fontsize=title_size)
         ac = ac.reshape(*grid_size)
-        plot_heatmap(ax4, ac, colorbar=True)
+        plot_heatmap(ax4, ac, colorbar=True, cmap=cmap)
 
         if s.chosen_at_random and s.argmax_acquisition is not None:
             label='$\\mathrm{{argmax}}\\; {}$'.format(self.acquisition_function_name)

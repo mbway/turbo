@@ -224,6 +224,11 @@ def no_exceptions(self, loggable):
     #self.assertNotIn('warning', loggable.log_record)
     #self.assertNotIn('Non-critical error', loggable.log_record)
 
+def remove_job_nums(samples):
+    for s in samples:
+        s.job_num = None
+    return samples
+
 
 class TestUtils(NumpyCompatableTestCase):
     def test_dotdict(self):
@@ -411,11 +416,14 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, optimiser)
         no_exceptions(self, evaluator)
 
-        mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
-        samples = [mks(1,3,1), mks(2,3,2), mks(1,4,1), mks(2,4,2)]
+        def to_samples(l):
+            return [op.Sample({'a':a, 'b':b}, cost, job_num=job_num)
+                    for a, b, cost, job_num in l]
+
+        samples = to_samples([(1,3,1,1), (2,3,2,2), (1,4,1,3), (2,4,2,4)])
 
         self.assertEqual(optimiser.samples, samples)
-        self.assertIn(optimiser.best_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
+        self.assertIn(optimiser.best_sample(), to_samples([(1,3,1,1), (1,4,1,3)])) # either would be acceptable
 
     def test_grid_maximise(self):
         # same as _simple_grid but maximising instead
@@ -434,11 +442,13 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, optimiser)
         no_exceptions(self, evaluator)
 
-        mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
-        samples = [mks(1,3,1), mks(2,3,2), mks(1,4,1), mks(2,4,2)]
+        def to_samples(l):
+            return [op.Sample({'a':a, 'b':b}, cost, job_num=job_num)
+                    for a, b, cost, job_num in l]
+        samples = to_samples([(1,3,1,1), (2,3,2,2), (1,4,1,3), (2,4,2,4)])
 
         self.assertEqual(optimiser.samples, samples)
-        self.assertIn(optimiser.best_sample(), [mks(2,3,2), mks(2,4,2)]) # either would be acceptable
+        self.assertIn(optimiser.best_sample(), to_samples([(2,3,2,2), (2,4,2,4)])) # either would be acceptable
 
 
     def test_grid_specific_order(self):
@@ -455,11 +465,13 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, optimiser)
         no_exceptions(self, evaluator)
 
-        mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
-        samples = [mks(1,3,1), mks(1,4,1), mks(2,3,2), mks(2,4,2)]
+        def to_samples(l):
+            return [op.Sample({'a':a, 'b':b}, cost, job_num=job_num)
+                    for a, b, cost, job_num in l]
+        samples = to_samples([(1,3,1,1), (1,4,1,2), (2,3,2,3), (2,4,2,4)])
 
         self.assertEqual(optimiser.samples, samples)
-        self.assertIn(optimiser.best_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
+        self.assertIn(optimiser.best_sample(), to_samples([(1,3,1,1), (1,4,1,2)])) # either would be acceptable
 
     def test_range_length_1(self):
         # ranges of length 0 are not allowed
@@ -476,11 +488,10 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, optimiser)
         no_exceptions(self, evaluator)
 
-        mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
-        samples = [mks(1,2,1)]
+        s = op.Sample({'a':1, 'b': 2}, cost=1, job_num=1)
 
-        self.assertEqual(optimiser.samples, samples)
-        self.assertEqual(optimiser.best_sample(), mks(1,2,1))
+        self.assertEqual(optimiser.samples, [s])
+        self.assertEqual(optimiser.best_sample(), s)
 
     def test_empty_range(self):
         ranges = {}
@@ -496,7 +507,7 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, optimiser)
         no_exceptions(self, evaluator)
 
-        s = op.Sample(config={}, cost=123)
+        s = op.Sample(config={}, cost=123, job_num=1)
         self.assertEqual(optimiser.samples, [s])
         self.assertEqual(optimiser.best_sample(), s)
 
@@ -526,8 +537,10 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, optimiser)
         no_exceptions(self, evaluator)
 
-        mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
-        samples = [mks(1,3,1), mks(2,3,2), mks(1,4,1), mks(2,4,2)]
+        def to_samples(l):
+            return [op.Sample({'a':a, 'b':b}, cost) for a, b, cost in l]
+        samples = to_samples([(1,3,1), (2,3,2), (1,4,1), (2,4,2)])
+        remove_job_nums(optimiser.samples) # order doesn't matter since random
         # samples subset of optimiser.samples
         for s in optimiser.samples:
             self.assertIn(s, samples)
@@ -535,7 +548,7 @@ class TestOptimiser(NumpyCompatableTestCase):
         for s in samples:
             self.assertIn(s, optimiser.samples)
 
-        self.assertIn(optimiser.best_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
+        self.assertIn(optimiser.best_sample(), to_samples([(1,3,1), (1,4,1)])) # either would be acceptable
 
     def test_random_maximise(self):
         ranges = {'a':[1,2], 'b':[3,4]}
@@ -551,8 +564,10 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, optimiser)
         no_exceptions(self, evaluator)
 
-        mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
-        samples = [mks(1,3,1), mks(2,3,2), mks(1,4,1), mks(2,4,2)]
+        def to_samples(l):
+            return [op.Sample({'a':a, 'b':b}, cost) for a, b, cost in l]
+        samples = to_samples([(1,3,1), (2,3,2), (1,4,1), (2,4,2)])
+        remove_job_nums(optimiser.samples) # order doesn't matter
         # samples subset of optimiser.samples
         for s in optimiser.samples:
             self.assertIn(s, samples)
@@ -560,7 +575,7 @@ class TestOptimiser(NumpyCompatableTestCase):
         for s in samples:
             self.assertIn(s, optimiser.samples)
 
-        self.assertIn(optimiser.best_sample(), [mks(2,3,2), mks(2,4,2)]) # either would be acceptable
+        self.assertIn(optimiser.best_sample(), to_samples([(2,3,2), (2,4,2)])) # either would be acceptable
 
     @unittest.skipIf(NO_SLOW_TESTS, 'slow test')
     def test_simple_server(self):
@@ -569,7 +584,6 @@ class TestOptimiser(NumpyCompatableTestCase):
         class TestEvaluator(op.Evaluator):
             def test_config(self, config):
                 return config.a # placeholder cost function
-        mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
 
         optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
         evaluator = TestEvaluator()
@@ -586,9 +600,12 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, optimiser)
         no_exceptions(self, evaluator)
 
-        samples = [mks(1,3,1), mks(2,3,2), mks(1,4,1), mks(2,4,2)]
+        def to_samples(l):
+            return [op.Sample({'a':a, 'b':b}, cost, job_num=job_num)
+                    for a, b, cost, job_num in l]
+        samples = to_samples([(1,3,1,1), (2,3,2,2), (1,4,1,3), (2,4,2,4)])
         self.assertEqual(optimiser.samples, samples)
-        self.assertIn(optimiser.best_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
+        self.assertIn(optimiser.best_sample(), to_samples([(1,3,1,1), (1,4,1,3)])) # either would be acceptable
 
 
     def test_optimisation_sequential_stop(self):
@@ -597,7 +614,6 @@ class TestOptimiser(NumpyCompatableTestCase):
         class TestEvaluator(op.Evaluator):
             def test_config(self, config):
                 return config.a # placeholder cost function
-        mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
 
         optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
         evaluator = TestEvaluator()
@@ -609,9 +625,12 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, optimiser)
         no_exceptions(self, evaluator)
 
-        samples = [mks(1,3,1), mks(2,3,2), mks(1,4,1), mks(2,4,2)]
+        def to_samples(l):
+            return [op.Sample({'a':a, 'b':b}, cost, job_num=job_num)
+                    for a, b, cost, job_num in l]
+        samples = to_samples([(1,3,1,1), (2,3,2,2), (1,4,1,3), (2,4,2,4)])
         self.assertEqual(optimiser.samples, samples)
-        self.assertIn(optimiser.best_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
+        self.assertIn(optimiser.best_sample(), to_samples([(1,3,1,1), (1,4,1,3)])) # either would be acceptable
 
     @unittest.skipIf(NO_SLOW_TESTS, 'slow test')
     def test_optimisation_server_stop(self):
@@ -620,7 +639,10 @@ class TestOptimiser(NumpyCompatableTestCase):
         class TestEvaluator(op.Evaluator):
             def test_config(self, config):
                 return config.a # placeholder cost function
-        mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
+
+        def to_samples(l):
+            return [op.Sample({'a':a, 'b':b}, cost, job_num=job_num)
+                    for a, b, cost, job_num in l]
 
         optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
         evaluator = TestEvaluator()
@@ -628,8 +650,9 @@ class TestOptimiser(NumpyCompatableTestCase):
         ev_thread = threading.Thread(target=evaluator.run_client, name='evaluator')
         ev_thread.start()
 
+
         optimiser.run_server(max_jobs=1)
-        self.assertEqual(optimiser.samples, [mks(1,3,1)])
+        self.assertEqual(optimiser.samples, to_samples([(1,3,1,1)]))
         optimiser.run_server(max_jobs=2)
         optimiser.run_server(max_jobs=4)
 
@@ -640,9 +663,9 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, optimiser)
         no_exceptions(self, evaluator)
 
-        samples = [mks(1,3,1), mks(2,3,2), mks(1,4,1), mks(2,4,2)]
+        samples = to_samples([(1,3,1,1), (2,3,2,2), (1,4,1,3), (2,4,2,4)])
         self.assertEqual(optimiser.samples, samples)
-        self.assertIn(optimiser.best_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
+        self.assertIn(optimiser.best_sample(), to_samples([(1,3,1,1), (1,4,1,3)])) # either would be acceptable
 
     @unittest.skipIf(NO_SLOW_TESTS, 'slow test')
     def test_evaluator_client_stop(self):
@@ -654,7 +677,10 @@ class TestOptimiser(NumpyCompatableTestCase):
         class TestEvaluator(op.Evaluator):
             def test_config(self, config):
                 return config.a # placeholder cost function
-        mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
+
+        def to_samples(l):
+            return [op.Sample({'a':a, 'b':b}, cost, job_num=job_num)
+                    for a, b, cost, job_num in l]
 
         optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
         evaluator = TestEvaluator()
@@ -666,7 +692,7 @@ class TestOptimiser(NumpyCompatableTestCase):
 
         # wait for the optimiser to process the results
         wait_for(lambda: len(optimiser.samples) == 1)
-        self.assertEqual(optimiser.samples, [mks(1,3,1)])
+        self.assertEqual(optimiser.samples, to_samples([(1,3,1,1)]))
 
         evaluator.run_client(max_jobs=2)
         # optimiser does not tell clients to stop, has to be done manually from
@@ -679,9 +705,9 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, optimiser)
         no_exceptions(self, evaluator)
 
-        samples = [mks(1,3,1), mks(2,3,2), mks(1,4,1), mks(2,4,2)]
+        samples = to_samples([(1,3,1,1), (2,3,2,2), (1,4,1,3), (2,4,2,4)])
         self.assertEqual(optimiser.samples, samples)
-        self.assertIn(optimiser.best_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
+        self.assertIn(optimiser.best_sample(), to_samples([(1,3,1,1), (1,4,1,3)])) # either would be acceptable
 
     @unittest.skipIf(NO_SLOW_TESTS, 'slow test')
     def test_multithreaded(self):
@@ -690,7 +716,6 @@ class TestOptimiser(NumpyCompatableTestCase):
         class TestEvaluator(op.Evaluator):
             def test_config(self, config):
                 return config.a # placeholder cost function
-        mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
 
         optimiser1 = op.GridSearchOptimiser(ranges, order=['a','b'])
         optimiser2 = op.GridSearchOptimiser(ranges, order=['a','b'])
@@ -726,15 +751,22 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, optimiser)
         no_exceptions(self, evaluator)
 
-        mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost) # make sample
-        mks_2 = lambda a,b,cost: op.Sample({'a':a, 'b':b, 'abc':123}, cost) # make sample
-        samples = [mks(1,3,1), mks_2(1,3,10),
-                   mks(2,3,2), mks_2(2,3,10),
-                   mks(1,4,1), mks_2(1,4,10),
-                   mks(2,4,2), mks_2(2,4,10)]
+        def to_samples(l):
+            samples = [op.Sample({'a':a, 'b':b, 'abc':abc}, cost, job_num=job_num)
+                       for a, b, abc, cost, job_num in l]
+            for s in samples:
+                if s.config['abc'] is None:
+                    del s.config['abc']
+            return samples
+        samples = to_samples([
+            (1,3,None,1,1), (1,3,123,10,1),
+            (2,3,None,2,2), (2,3,123,10,2),
+            (1,4,None,1,3), (1,4,123,10,3),
+            (2,4,None,2,4), (2,4,123,10,4)
+        ])
 
         self.assertEqual(optimiser.samples, samples)
-        self.assertIn(optimiser.best_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
+        self.assertIn(optimiser.best_sample(), to_samples([(1,3,None,1,1), (1,4,None,1,2)])) # either would be acceptable
 
     def test_evaluator_extra(self):
         ranges = {'a':[1,2], 'b':[3,4]}
@@ -750,11 +782,18 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, optimiser)
         no_exceptions(self, evaluator)
 
-        mks = lambda a,b,cost: op.Sample({'a':a, 'b':b}, cost, extra={'test':'abc'}) # make sample
-        samples = [mks(1,3,1), mks(2,3,2), mks(1,4,1), mks(2,4,2)]
+        def to_samples(l):
+            return [op.Sample({'a':a, 'b':b}, cost, extra, job_num=job_num)
+                    for a, b, cost, extra, job_num in l]
+        samples = to_samples([
+            (1,3,1,{'test':'abc'},1),
+            (2,3,2,{'test':'abc'},2),
+            (1,4,1,{'test':'abc'},3),
+            (2,4,2,{'test':'abc'},4)])
 
         self.assertEqual(optimiser.samples, samples)
-        self.assertIn(optimiser.best_sample(), [mks(1,3,1), mks(1,4,1)]) # either would be acceptable
+        self.assertIn(optimiser.best_sample(), to_samples([
+            (1,3,1,{'test':'abc'},1), (1,4,1,{'test':'abc'},3)])) # either would be acceptable
 
     def test_evaluator_empty_list(self):
         ranges = {'a':[1,2], 'b':[3,4]}

@@ -19,3 +19,27 @@
 
 # Tips for tuning hyper-parameters
 - first list out the hyperparameters to tune and potentially rule out the ones that will be kept fixed (eg like the layer activation functions)
+
+# Things I learned about Bayesian optimisation
+- care has to be taken regarding the surrogate function or the results could be worse than random
+- Gaussian processes are harder to fit to data than expected
+- Plotting the results can help determine if the parameter ranges you imposed are too restrictive as the optimiser always wants to sample at the extreme of a parameter
+- with EI and PI acquisition functions it is important to find the global maximum of the acquisition function because it is often a very thin spike and so easy to miss during optimisation. UCB does not suffer from this as much.
+- favouring exploration seems to generally perform better, at least more consistently
+- UCB appears to be the best acquisition function for most of my tests
+- choosing randomly instead of sampling very close to an existing sample does help, but choosing a tolerance too large does more harm than good. For some functions, I got better results from having a very small (1e-8) tolerance to allow the Bayesian optimisation to have more control over where to sample.
+- parallel Bayesian optimisation improves performance, however if it causes the GP fit to cause an inaccurate fit then it may be harmful (perhaps no worse than random). Explicitly accounting for noise in the GP kernel may help with this.
+- choosing an objective function is important and very challenging
+- discrete parameters can be simulated by rounding the given continuous value.
+- Bayesian optimisation can handle pretty well with a noisy objective function, the GP will smooth out the surrogate function allowing good samples to still be chosen.
+- unfortunately, different objective functions can be fitted by different GP kernels, however without knowing the true function it is hard to determine the correct kernel to use.
+
+# Things I learned about networking
+- it is so much better to extract all the networking logic and abstract it when interacting with the rest of the program logic. It makes it much easier to analyse the behaviour of the protocol by reducing the number of possible execution paths
+- sockets sometimes break when you don't expect them to, and sometimes don't break when you expect them to. So always handle every possible failure when networking is involved
+- TCP is not as reliable as I thought, the checksum is weak and other errors which I simulated broke through to the application layer where I had to deal with them manually
+- having tried both approaches, I think that it is better to have more short lived connections rather than keeping a few connections open for a long time. It makes re-starting the connection easier when an error occurs and a thread pool is not required to deal with all the open connections, so the server can be serialised (which may actually increase performance)
+    - single-threaded logic is also much simpler as queues and locks are not required
+- when designing something to be reliable, it seems to be a good idea to have the last message be some confirmation from the peer expecting some important data, if the sender of the important data receives the confirmation then they can be quite sure that everything is fine.
+- it helps to draw out the protocol through every possible trace, including all possible errors and checking how your code would respond
+
