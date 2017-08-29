@@ -1,6 +1,6 @@
 .PHONY: clean
 
 clean:
-	rm checkpoint*.json
-	rm *.pyc
+	rm -f checkpoint*.json
+	rm -f *.pyc
 

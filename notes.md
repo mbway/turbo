@@ -28,11 +28,13 @@
 - favouring exploration seems to generally perform better, at least more consistently
 - UCB appears to be the best acquisition function for most of my tests
 - choosing randomly instead of sampling very close to an existing sample does help, but choosing a tolerance too large does more harm than good. For some functions, I got better results from having a very small (1e-8) tolerance to allow the Bayesian optimisation to have more control over where to sample.
+    - for very smooth functions (such as the toy ones I used during development) a large close tolerance is fine.
 - parallel Bayesian optimisation improves performance, however if it causes the GP fit to cause an inaccurate fit then it may be harmful (perhaps no worse than random). Explicitly accounting for noise in the GP kernel may help with this.
 - choosing an objective function is important and very challenging
 - discrete parameters can be simulated by rounding the given continuous value.
 - Bayesian optimisation can handle pretty well with a noisy objective function, the GP will smooth out the surrogate function allowing good samples to still be chosen.
 - unfortunately, different objective functions can be fitted by different GP kernels, however without knowing the true function it is hard to determine the correct kernel to use.
+- when the GP does not fit at all and describes the variation in the data as being completely noise, this may indicate that more restarts of the GP optimiser is required
 
 # Things I learned about networking
 - it is so much better to extract all the networking logic and abstract it when interacting with the rest of the program logic. It makes it much easier to analyse the behaviour of the protocol by reducing the number of possible execution paths

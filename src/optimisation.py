@@ -1282,7 +1282,7 @@ class BayesianOptimisationOptimiser(Optimiser):
                 # nu=1.5 assumes the target function is once-differentiable
                 kernel = 1.0 * gp.kernels.Matern(nu=1.5) + gp.kernels.WhiteKernel(),
                 #kernel = 1.0 * gp.kernels.RBF(),
-                n_restarts_optimizer = 5,
+                n_restarts_optimizer = 10,
                 # make the mean 0 (theoretically a bad thing, see docs, but can help)
                 # with the constant offset in the kernel this shouldn't be required
                 #normalize_y = True,
@@ -1691,7 +1691,7 @@ class BayesianOptimisationOptimiser(Optimiser):
 
     #TODO: should rename? make CB/UCB/LCB all refer to this function
     @staticmethod
-    def upper_confidence_bound(xs, gp_model, maximise_cost, best_cost, kappa=1.0):
+    def upper_confidence_bound(xs, gp_model, maximise_cost, best_cost, kappa=3.0):
         r'''
         upper confidence bound when maximising, lower confidence bound when minimising
         $$\begin{align*}
