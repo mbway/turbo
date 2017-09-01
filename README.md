@@ -4,6 +4,9 @@
 
 ## Features (some unique)
 - parallel optimisation (multiple evaluations at once) with hypothesised samples
+    - 'Kriging Believer' Ginsbourger et al
+    - possibly not the best solution to parallelising. Also note: the paper
+    only mentions using EI acquisition function.
 - client/server architecture allowing for massively parallel optimisation
 - checkpoints and plotting each step of optimisation
     - the GP is saved exactly so another GP does not have to be trained for plotting (which may fit differently to the GP used during the algorithm)

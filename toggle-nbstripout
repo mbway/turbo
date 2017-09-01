@@ -1,0 +1,15 @@
+#!/bin/bash
+
+# initially use `nbstripout --install` to register nbstripout for the repository
+
+# only run for lines which match /nbstripout/
+# replace ^#* with either nothing (to enable) or a single #
+
+if [ "$1" == "enable" ]; then
+    sed -i '/nbstripout/ s/^#*//' .git/info/attributes
+elif [ "$1" == "disable" ]; then
+    sed -i '/nbstripout/ s/^#*/#/' .git/info/attributes
+else
+    echo "usage: toggle-nbstripout (enable|disable)"
+fi
+

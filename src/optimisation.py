@@ -1,11 +1,12 @@
+#!/usr/bin/env python3
 '''
 TODO: module docstring
 '''
-
 # fix some of the python2 ugliness
 from __future__ import print_function
 from __future__ import division
 from __future__ import unicode_literals
+
 import time
 import json
 import os
@@ -148,17 +149,13 @@ class Evaluator(object):
         # number of times there have been no jobs available in a row
         num_rejections = 0
 
-        def should_stop():
-            return self.wants_to_stop() or num_jobs >= max_jobs
-
-        def on_error(e):
-            time.sleep(NON_CRITICAL_WAIT)
+        should_stop = lambda: self.wants_to_stop() or num_jobs >= max_jobs
+        on_error = lambda e: time.sleep(NON_CRITICAL_WAIT)
 
         def message_client(request, should_stop):
             ''' most of the arguments are the same '''
             return op_net.message_client((host, port), timeout, request,
                                          should_stop, on_error)
-
 
         try:
             while not should_stop():
@@ -207,6 +204,55 @@ class Evaluator(object):
         finally:
             self.log('evaluator shut down')
 
+    def _convert_results(self, results, config):
+        '''
+        test_config may return several different things. This function converts
+        those results into a standard form: a list of Sample objects.
+        '''
+        # test_config can return either a cost value, a sample object or a list
+        # of sample objects
+        if is_numeric(results):
+            # evaluator returned cost
+            return [Sample(config, results)]
+        elif (isinstance(results, tuple) and len(results) == 2 and
+              is_numeric(results[0]) and isinstance(results[1], dict)):
+            # evaluator returned cost and extra as a tuple
+            return [Sample(config, results[0], results[1])]
+        elif isinstance(results, Sample):
+            # evaluator returned a single sample
+            return [results]
+        elif isinstance(results, list) and all(isinstance(r, Sample) for r in results):
+            # evaluator returned a list of samples
+            return results
+        else:
+            raise ValueError('invalid results type from evaluator')
+
+    def _evaluate_config(self, config):
+        '''
+        evaluate a configuration and return the results in a standard form (list
+        of Sample objects.
+
+        In the case of an error: instead of crashing, test_config will be run
+        again with the same configuration in the hopes that it won't happen again
+        '''
+        while True:
+            try:
+                results = self.test_config(config)
+            except Exception:
+                self.log('exception when testing a configuration!\n' +
+                         exception_string())
+                continue
+
+            samples = self._convert_results(results, config)
+
+            # cost values cannot be NaN or infinity because this breaks the GP
+            invalid_cost = any(np.isnan(s.cost) or np.isinf(s.cost) for s in samples)
+            if invalid_cost:
+                self.log('invalid cost for one of the samples: {}'.format(samples))
+                continue
+
+            return samples
+
     def _evaluate_job(self, job):
         start_time = time.time()
         job_num = job['num']
@@ -215,8 +261,7 @@ class Evaluator(object):
         self.log('evaluating job {}: config: {}'.format(
             job_num, config_string(config, precise=True)))
 
-        results = self.test_config(config)
-        samples = Evaluator.samples_from_test_results(results, config)
+        samples = self._evaluate_config(config)
         # for JSON serialisation
         samples = [(s.config, s.cost, s.extra) for s in samples]
 
@@ -256,31 +301,6 @@ class Evaluator(object):
         self.log_record += msg
         if self.noisy:
             print(msg, end='')
-
-    @staticmethod
-    def samples_from_test_results(results, config):
-        '''
-        An evaluator may return several different things from test_config. This
-        function converts those results into a standard form: a list of Sample
-        objects.
-        '''
-        # evaluator can return either a cost value, a sample object or a list of sample objects
-        if is_numeric(results):
-            # evaluator returned cost
-            samples = [Sample(config, results)]
-        elif (isinstance(results, tuple) and len(results) == 2 and
-              is_numeric(results[0]) and isinstance(results[1], dict)):
-            # evaluator returned cost and extra as a tuple
-            samples = [Sample(config, results[0], results[1])]
-        elif isinstance(results, Sample):
-            # evaluator returned a single sample
-            samples = [results]
-        elif isinstance(results, list) and all(isinstance(r, Sample) for r in results):
-            # evaluator returned a list of samples
-            samples = results
-        else:
-            raise ValueError('invalid results type from evaluator')
-        return samples
 
     def test_config(self, config):
         '''
@@ -388,11 +408,12 @@ class Optimiser(object):
             self.num_started_jobs += 1
             return Job(config, job_num, setup_duration)
 
-    def _process_job_results(self, job, results):
+    def _process_job_results(self, job, samples):
         '''
         check the results of the job are valid, record them and post to the log
+        samples: must be in the 'standard format': a list of Sample objects. The
+            job_num attribute need not be set
         '''
-        samples = Evaluator.samples_from_test_results(results, job.config)
         for s in samples:
             s.job_num = job.num
         self.samples.extend(samples)
@@ -494,10 +515,10 @@ class Optimiser(object):
 
             else:
                 # during transmission: serialised to tuples
-                results = [Sample(dotdict(config), cost, extra)
+                samples = [Sample(dotdict(config), cost, extra)
                         for config, cost, extra in msg['samples']]
                 job = Job(**msg['job'])
-                self._process_job_results(job, results)
+                self._process_job_results(job, samples)
                 state.finished_this_run += 1
 
                 # if the results are for the job that the optimiser wasn't sure
@@ -638,10 +659,10 @@ class Optimiser(object):
                     break
 
                 evaluation_start = time.time()
-                results = evaluator.test_config(job.config)
+                samples = evaluator._evaluate_config(job.config)
                 job.evaluation_duration = time.time() - evaluation_start
 
-                self._process_job_results(job, results)
+                self._process_job_results(job, samples)
 
                 state.finished_this_run += 1
                 self.duration = state.old_duration + state.run_time()

@@ -1,12 +1,16 @@
+#!/usr/bin/env python3
 '''
 Networking utilities for the optimiser library
 '''
+from __future__ import print_function
 
 import time
 import json
 import struct
 import socket
 import hashlib
+
+from optimisation_utils import exception_string
 
 
 # This is to prevent deadlock but if a socket times out then it may be fatal. At
@@ -193,7 +197,14 @@ def message_server(server_addr, connect_timeout,
                 if request == empty_msg():
                     # client sent an empty request, does not expect a response
                     continue
-                response = handle_request(request)
+
+                try:
+                    response = handle_request(request)
+                except Exception:
+                    print('Fatal Exception during server request handling\n' +
+                          exception_string(), flush=True)
+                    send_msg(conn, empty_msg()) # have to obey protocol
+                    continue
                 send_msg(conn, response)
 
                 # if the response is non-empty, expect a confirmation reply

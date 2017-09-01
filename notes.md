@@ -35,6 +35,7 @@
 - Bayesian optimisation can handle pretty well with a noisy objective function, the GP will smooth out the surrogate function allowing good samples to still be chosen.
 - unfortunately, different objective functions can be fitted by different GP kernels, however without knowing the true function it is hard to determine the correct kernel to use.
 - when the GP does not fit at all and describes the variation in the data as being completely noise, this may indicate that more restarts of the GP optimiser is required
+- if you know what the surrogate function should look like then you can set the surrogate GP parameters to fixed values (eg the length scale should be the average distance between the points)
 
 # Things I learned about networking
 - it is so much better to extract all the networking logic and abstract it when interacting with the rest of the program logic. It makes it much easier to analyse the behaviour of the protocol by reducing the number of possible execution paths
