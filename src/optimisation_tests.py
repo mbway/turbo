@@ -58,6 +58,7 @@ import sklearn.gaussian_process as gp
 import optimisation as op
 import optimisation_gui as op_gui
 import optimisation_net as op_net
+from optimisation_utils import DataHolder
 
 # whether to skip tests which are slow (useful when writing a new test)
 NO_SLOW_TESTS = False
@@ -92,6 +93,8 @@ TEST_GP_PARAMS = {
     'normalize_y':True,
     'copy_X_train':True
 }
+#TODO: change when all acquisition function parameters change. lower number of restarts for maximisation
+TEST_AC_PARAMS = {}
 
 def finish_off_evaluators(timeout=0.4):
     '''
@@ -127,10 +130,6 @@ class NumpyCompatableTestCase(unittest.TestCase):
     when a sequence is the value of an item!
     '''
 
-    # for objects of these classes, iterate over __dict__ and convert any
-    # attributes which are numpy arrays into lists
-    convertable_classes = [op.Sample]
-
     def convert_np(self, val):
         ''' recursively change all numpy arrays to lists '''
         if isinstance(val, dict):
@@ -141,10 +140,11 @@ class NumpyCompatableTestCase(unittest.TestCase):
             return [self.convert_np(v) for v in val]
         elif isinstance(val, tuple):
             return tuple([self.convert_np(v) for v in val])
-        elif hasattr(val, '__dict__') and any(isinstance(val, c) for c in NumpyCompatableTestCase.convertable_classes):
-            val.__dict__ = self.convert_np(val.__dict__)
+        elif isinstance(val, DataHolder): # a custom utility class
+            return {k : self.convert_np(v) for k, v in val}
         else:
             return val
+
     def convert_types(self, val):
         '''
         convert_np destroys the information that one of the dictionaries may
@@ -164,6 +164,7 @@ class NumpyCompatableTestCase(unittest.TestCase):
             return int
         else:
             return type(val)
+
     def assertDictEqual(self, d1, d2, msg=None):
         unittest.TestCase.assertDictEqual(self, self.convert_types(d1), self.convert_types(d2), 'types don\'t match')
         try:
@@ -224,9 +225,9 @@ def no_exceptions(self, loggable):
     #self.assertNotIn('warning', loggable.log_record)
     #self.assertNotIn('Non-critical error', loggable.log_record)
 
-def remove_job_nums(samples):
+def remove_job_IDs(samples):
     for s in samples:
-        s.job_num = None
+        s.job_ID = None
     return samples
 
 
@@ -314,6 +315,26 @@ class TestUtils(NumpyCompatableTestCase):
         self.assertFalse(op.is_numeric(np.array([[1]])))
         self.assertFalse(op.is_numeric('1'))
         self.assertFalse(op.is_numeric('1.0'))
+
+    def test_DataHolder(self):
+        class Test1(DataHolder):
+            __slots__ = ('a')
+        d = {'a':1}
+        t = Test1(**d)
+        self.assertEqual(t, Test1(1))
+        self.assertEqual(t, Test1(**t.to_dict()))
+        self.assertEqual(t, Test1(*t.to_tuple()))
+        class Test2(DataHolder):
+            __slots__ = ('a', 'b', 'c')
+            __defaults__ = {'a':1, 'b':2, 'c':3}
+        l = [1, 2, []]
+        t = Test2(*l)
+        l[2].append('stuff')
+        self.assertEqual(t.c, ['stuff'])
+        self.assertEqual(t, Test2(**t.to_dict()))
+        self.assertEqual(t, Test2(*t.to_tuple()))
+        self.assertEqual(t.to_tuple(), (1, 2, ['stuff']))
+        self.assertEqual(Test2(4), Test2(4, 2, 3))
 
     @unittest.skipIf(NO_SLOW_TESTS, 'slow test')
     def test_random_config_points(self):
@@ -417,8 +438,8 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, evaluator)
 
         def to_samples(l):
-            return [op.Sample({'a':a, 'b':b}, cost, job_num=job_num)
-                    for a, b, cost, job_num in l]
+            return [op.Sample({'a':a, 'b':b}, cost, job_ID=job_ID)
+                    for a, b, cost, job_ID in l]
 
         samples = to_samples([(1,3,1,1), (2,3,2,2), (1,4,1,3), (2,4,2,4)])
 
@@ -443,8 +464,8 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, evaluator)
 
         def to_samples(l):
-            return [op.Sample({'a':a, 'b':b}, cost, job_num=job_num)
-                    for a, b, cost, job_num in l]
+            return [op.Sample({'a':a, 'b':b}, cost, job_ID=job_ID)
+                    for a, b, cost, job_ID in l]
         samples = to_samples([(1,3,1,1), (2,3,2,2), (1,4,1,3), (2,4,2,4)])
 
         self.assertEqual(optimiser.samples, samples)
@@ -466,8 +487,8 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, evaluator)
 
         def to_samples(l):
-            return [op.Sample({'a':a, 'b':b}, cost, job_num=job_num)
-                    for a, b, cost, job_num in l]
+            return [op.Sample({'a':a, 'b':b}, cost, job_ID=job_ID)
+                    for a, b, cost, job_ID in l]
         samples = to_samples([(1,3,1,1), (1,4,1,2), (2,3,2,3), (2,4,2,4)])
 
         self.assertEqual(optimiser.samples, samples)
@@ -488,7 +509,7 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, optimiser)
         no_exceptions(self, evaluator)
 
-        s = op.Sample({'a':1, 'b': 2}, cost=1, job_num=1)
+        s = op.Sample({'a':1, 'b': 2}, cost=1, job_ID=1)
 
         self.assertEqual(optimiser.samples, [s])
         self.assertEqual(optimiser.best_sample(), s)
@@ -507,7 +528,7 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, optimiser)
         no_exceptions(self, evaluator)
 
-        s = op.Sample(config={}, cost=123, job_num=1)
+        s = op.Sample(config={}, cost=123, job_ID=1)
         self.assertEqual(optimiser.samples, [s])
         self.assertEqual(optimiser.best_sample(), s)
 
@@ -540,7 +561,7 @@ class TestOptimiser(NumpyCompatableTestCase):
         def to_samples(l):
             return [op.Sample({'a':a, 'b':b}, cost) for a, b, cost in l]
         samples = to_samples([(1,3,1), (2,3,2), (1,4,1), (2,4,2)])
-        remove_job_nums(optimiser.samples) # order doesn't matter since random
+        remove_job_IDs(optimiser.samples) # order doesn't matter since random
         # samples subset of optimiser.samples
         for s in optimiser.samples:
             self.assertIn(s, samples)
@@ -567,7 +588,7 @@ class TestOptimiser(NumpyCompatableTestCase):
         def to_samples(l):
             return [op.Sample({'a':a, 'b':b}, cost) for a, b, cost in l]
         samples = to_samples([(1,3,1), (2,3,2), (1,4,1), (2,4,2)])
-        remove_job_nums(optimiser.samples) # order doesn't matter
+        remove_job_IDs(optimiser.samples) # order doesn't matter
         # samples subset of optimiser.samples
         for s in optimiser.samples:
             self.assertIn(s, samples)
@@ -601,8 +622,8 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, evaluator)
 
         def to_samples(l):
-            return [op.Sample({'a':a, 'b':b}, cost, job_num=job_num)
-                    for a, b, cost, job_num in l]
+            return [op.Sample({'a':a, 'b':b}, cost, job_ID=job_ID)
+                    for a, b, cost, job_ID in l]
         samples = to_samples([(1,3,1,1), (2,3,2,2), (1,4,1,3), (2,4,2,4)])
         self.assertEqual(optimiser.samples, samples)
         self.assertIn(optimiser.best_sample(), to_samples([(1,3,1,1), (1,4,1,3)])) # either would be acceptable
@@ -626,8 +647,8 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, evaluator)
 
         def to_samples(l):
-            return [op.Sample({'a':a, 'b':b}, cost, job_num=job_num)
-                    for a, b, cost, job_num in l]
+            return [op.Sample({'a':a, 'b':b}, cost, job_ID=job_ID)
+                    for a, b, cost, job_ID in l]
         samples = to_samples([(1,3,1,1), (2,3,2,2), (1,4,1,3), (2,4,2,4)])
         self.assertEqual(optimiser.samples, samples)
         self.assertIn(optimiser.best_sample(), to_samples([(1,3,1,1), (1,4,1,3)])) # either would be acceptable
@@ -641,8 +662,8 @@ class TestOptimiser(NumpyCompatableTestCase):
                 return config.a # placeholder cost function
 
         def to_samples(l):
-            return [op.Sample({'a':a, 'b':b}, cost, job_num=job_num)
-                    for a, b, cost, job_num in l]
+            return [op.Sample({'a':a, 'b':b}, cost, job_ID=job_ID)
+                    for a, b, cost, job_ID in l]
 
         optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
         evaluator = TestEvaluator()
@@ -679,8 +700,8 @@ class TestOptimiser(NumpyCompatableTestCase):
                 return config.a # placeholder cost function
 
         def to_samples(l):
-            return [op.Sample({'a':a, 'b':b}, cost, job_num=job_num)
-                    for a, b, cost, job_num in l]
+            return [op.Sample({'a':a, 'b':b}, cost, job_ID=job_ID)
+                    for a, b, cost, job_ID in l]
 
         optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
         evaluator = TestEvaluator()
@@ -752,8 +773,8 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, evaluator)
 
         def to_samples(l):
-            samples = [op.Sample({'a':a, 'b':b, 'abc':abc}, cost, job_num=job_num)
-                       for a, b, abc, cost, job_num in l]
+            samples = [op.Sample({'a':a, 'b':b, 'abc':abc}, cost, job_ID=job_ID)
+                       for a, b, abc, cost, job_ID in l]
             for s in samples:
                 if s.config['abc'] is None:
                     del s.config['abc']
@@ -783,8 +804,8 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, evaluator)
 
         def to_samples(l):
-            return [op.Sample({'a':a, 'b':b}, cost, extra, job_num=job_num)
-                    for a, b, cost, extra, job_num in l]
+            return [op.Sample({'a':a, 'b':b}, cost, extra, job_ID=job_ID)
+                    for a, b, cost, extra, job_ID in l]
         samples = to_samples([
             (1,3,1,{'test':'abc'},1),
             (2,3,2,{'test':'abc'},2),
@@ -856,7 +877,7 @@ def get_dict(optimiser, different_run=False):
             d['hypothesised_samples'] = [s for s in d['hypothesised_samples'] if s[0] not in optimiser.finished_job_ids]
         if 'step_log' in d.keys():
             # Gaussian Processes cannot be compared
-            d['step_log'] = {job_num: {k:v for k, v in step.items() if k != 'gp'} for job_num, step in d['step_log'].items()}
+            d['step_log'] = {job_ID: {k:v for k, v in step if k != 'gp'} for job_ID, step in d['step_log'].items()}
         return d
 
 class reset_random:
@@ -1026,7 +1047,6 @@ class TestCheckpoints(NumpyCompatableTestCase):
         num_jobs: the number of jobs to run each optimiser for
         '''
         self.assertTrue(optimiser.configuration_space_size() >= num_jobs)
-
         cp = '/tmp/checkpoint.json'
         cm = CheckpointManager(self, cp, optimiser, create_optimiser, num_jobs)
 

@@ -57,54 +57,51 @@ def ON_EXCEPTION(e):
 
 
 
-class Job(object):
+class Job(DataHolder):
     '''
-    a job is a single configuration to be tested, it may result in one or
-    multiple samples being evaluated.
+    A unit of work consisting of a single configuration to be evaluated. A
+    single job may result in multiple samples because the evaluator may choose
+    to evaluate other configurations as well as the suggested one.
+
+    ID: a numeric ID to uniquely identify the job (assigned with a contiguous increasing counter)
+    config: the configuration to test for this job
+    setup_duration: number of seconds taken to choose the config
+    evaluation_duration: number of seconds taken to evaluate the config
     '''
-    def __init__(self, config, num, setup_duration=0, evaluation_duration=0):
-        '''
-        config: the configuration to test
-        job_num: a unique ID for the job
-        setup_duration: the time taken for _next_configuration to generate 'config'
-        '''
-        self.config = config
-        self.num = num
-        self.setup_duration = setup_duration
-        self.evaluation_duration = evaluation_duration
+    __slots__ = ('ID', 'config', 'setup_duration', 'evaluation_duration')
+    __defaults__ = {
+        'setup_duration'      : None,
+        'evaluation_duration' : None
+    }
     def total_time(self):
         return self.setup_duration + self.evaluation_duration
 
-class Sample(object):
+class Sample(DataHolder):
     '''
-    a sample is a configuration and its corresponding cost as determined by an
-    evaluator. Potentially also stores information of interest in 'extra'.
-    '''
-    def __init__(self, config, cost, extra=None, job_num=None):
-        '''
-        extra: miscellaneous information about the sample. Not used by the
-            optimiser but can be used to store useful information for later. The
-            extra information will be saved along with the rest of the sample data.
-        job_num: the job number which the sample was evaluated for
-        '''
-        self.config = config
-        self.cost = cost
-        self.extra = {} if extra is None else extra
-        self.job_num = job_num
-    def __repr__(self):
-        ''' used in unit tests '''
-        if self.extra: # not empty
-            return '(config={}, cost={}, extra={}, job_num={})'.format(
-                config_string(self.config), self.cost, self.extra, self.job_num)
-        else:
-            return '(config={}, cost={}, job_num={})'.format(config_string(self.config), self.cost, self.job_num)
-    def __eq__(self, other):
-        ''' used in unit tests '''
-        return (self.config == other.config and
-                self.cost == other.cost and
-                self.extra == other.extra and
-                self.job_num == other.job_num)
+    The results of evaluating a single configuration.
 
+    config: the configuration that was evaluated
+    cost: the cost of 'config'
+    extra: problem-specific data (optional, not used by the optimiser)
+    job_ID: the ID of the job that this sample was taken in
+    '''
+    __slots__ = ('config', 'cost', 'extra', 'job_ID')
+    __defaults__ = {
+        'extra'  : {},
+        'job_ID' : None
+    }
+    def to_encoded_tuple(self):
+        ''' for storage or sending as part of a JSON message '''
+        # for storage it may be slightly smaller than a raw JSON encoding, for
+        # transferring over the network, pickling ensures numpy arrays or other
+        # data is preserved and not converted to lists for example.
+        extra = JSON_encode_binary(self.extra) if self.extra else None
+        return (self.config, self.cost, extra, self.job_ID)
+    @staticmethod
+    def from_encoded_tuple(data):
+        ''' read from a tuple previously created with to_encoded_tuple '''
+        extra = JSON_decode_binary(data[2]) if data[2] is not None else {}
+        return Sample(dotdict(data[0]), data[1], extra, data[3])
 
 # Details of the network protocol between the optimiser and the evaluator:
 # Optimiser sets up a server and listens for clients.
@@ -145,11 +142,11 @@ class Evaluator(object):
         self._stop_flag.clear()
         self.log('evaluator client starting...')
         # number of finished evaluations this run
-        num_jobs = 0
+        num_finished_jobs = 0
         # number of times there have been no jobs available in a row
         num_rejections = 0
 
-        should_stop = lambda: self.wants_to_stop() or num_jobs >= max_jobs
+        should_stop = lambda: self.wants_to_stop() or num_finished_jobs >= max_jobs
         on_error = lambda e: time.sleep(NON_CRITICAL_WAIT)
 
         def message_client(request, should_stop):
@@ -175,11 +172,9 @@ class Evaluator(object):
                 else:
                     num_rejections = 0
 
-                job = op_net.decode_JSON(job)
+                job = Job(**op_net.decode_JSON(job))
+                job.config = dotdict(job.config)
                 self.log('received job: {}'.format(job))
-
-                assert set(job.keys()) == set(['config', 'num', 'setup_duration']), \
-                        'malformed job request: {}'.format(job)
 
                 ### Evaluate the job
                 results_msg = self._evaluate_job(job)
@@ -191,12 +186,12 @@ class Evaluator(object):
                 ack = message_client(results_msg, op_net.never_stop)
                 assert ack is not None and ack == op_net.empty_msg()
 
-                num_jobs += 1
+                num_finished_jobs += 1
                 self.log('results sent successfully')
 
             if self.wants_to_stop():
                 self.log('stopping because of manual shut down')
-            elif num_jobs >= max_jobs:
+            elif num_finished_jobs >= max_jobs:
                 self.log('stopping because max_jobs reached')
         except Exception as e:
             self.log('Exception raised during client run:\n{}'.format(exception_string()))
@@ -255,25 +250,20 @@ class Evaluator(object):
 
     def _evaluate_job(self, job):
         start_time = time.time()
-        job_num = job['num']
-        config = dotdict(job['config'])
 
         self.log('evaluating job {}: config: {}'.format(
-            job_num, config_string(config, precise=True)))
+            job.ID, config_string(job.config, precise=True)))
 
-        samples = self._evaluate_config(config)
-        # for JSON serialisation
-        samples = [(s.config, s.cost, s.extra) for s in samples]
-
+        samples = self._evaluate_config(job.config)
 
         self.log('returning results: {}'.format(
-            [(config, cost, list(extra.keys()))
-                for config, cost, extra in samples]))
+            [(s.config, s.cost, {k:'...' for k in s.extra.keys()}) for s in samples]))
 
-        job['evaluation_duration'] = time.time()-start_time # add this field
+        samples = [s.to_encoded_tuple() for s in samples] # for JSON serialisation
+        job.evaluation_duration = time.time()-start_time
         results_msg = {
             'type'    : 'job_results',
-            'job'     : job,
+            'job'     : job.to_dict(),
             'samples' : samples
         }
         results_msg = op_net.encode_JSON(results_msg, encoder=NumpyJSONEncoder)
@@ -333,15 +323,17 @@ class Optimiser(object):
         maximise_cost: True => higher cost is better. False => lower cost is better
         '''
         self.ranges = dotdict(ranges)
+        self.params = sorted(self.ranges.keys())
         self.maximise_cost = maximise_cost
 
         # note: number of samples may diverge from the number of jobs since a
         # job can result in any number of samples (including 0).
         # the configurations that have been tested (list of `Sample` objects)
         self.samples = []
-        self.num_started_jobs = 0 # number of started jobs
-        self.num_finished_jobs = 0 # number of finished jobs
-        self.finished_job_ids = set() # job.num is added after it is finished
+        self.num_started_jobs = 0
+        self.num_finished_jobs = 0
+        #TODO: rename to finished_job_IDs
+        self.finished_job_ids = set() # job.ID is added after it is finished
 
         self.duration = 0.0 # total time (seconds) spent running (persists across runs)
 
@@ -392,11 +384,11 @@ class Optimiser(object):
         None if there are no more configurations)
         '''
         assert self._ready_for_next_configuration()
-        job_num = self.num_started_jobs+1 # job number is 1-based
+        job_ID = self.num_started_jobs+1 # 1-based
 
         # for Bayesian optimisation this may take a little time
         start_time = time.time()
-        config = self._next_configuration(job_num)
+        config = self._next_configuration(job_ID)
         setup_duration = time.time()-start_time
 
         if config is None:
@@ -404,24 +396,24 @@ class Optimiser(object):
             return None # out of configurations
         else:
             config = dotdict(config)
-            self._log('started job {}: config={}'.format(job_num, config_string(config)))
+            self._log('started job {}: config={}'.format(job_ID, config_string(config)))
             self.num_started_jobs += 1
-            return Job(config, job_num, setup_duration)
+            return Job(job_ID, config, setup_duration)
 
     def _process_job_results(self, job, samples):
         '''
         check the results of the job are valid, record them and post to the log
         samples: must be in the 'standard format': a list of Sample objects. The
-            job_num attribute need not be set
+            job_ID attribute need not be set
         '''
         for s in samples:
-            s.job_num = job.num
+            s.job_ID = job.ID
         self.samples.extend(samples)
         self.num_finished_jobs += 1
-        self.finished_job_ids.add(job.num)
+        self.finished_job_ids.add(job.ID)
 
         self._log('finished job {} in {} (setup: {} evaluation: {}):'.format(
-            job.num, time_string(job.total_time()),
+            job.ID, time_string(job.total_time()),
             time_string(job.setup_duration), time_string(job.evaluation_duration)
         ))
         for i, s in enumerate(samples):
@@ -466,12 +458,7 @@ class Optimiser(object):
         assert 'type' in msg.keys(), 'malformed request: {}'.format(msg)
 
         def job_msg(job):
-            job_dict = {
-                'config' : job.config,
-                'num' : job.num,
-                'setup_duration' : job.setup_duration
-            }
-            return op_net.encode_JSON(job_dict, encoder=NumpyJSONEncoder)
+            return op_net.encode_JSON(job.to_dict(), encoder=NumpyJSONEncoder)
 
         if msg['type'] == 'job_request':
             # allowed to re-send the failed job even if generating new ones is
@@ -501,29 +488,29 @@ class Optimiser(object):
                     state.out_of_configs = True
                     return op_net.empty_msg() # send empty to signal no more jobs available
                 else:
-                    state.started_job_ids.add(job.num)
+                    state.started_job_ids.add(job.ID)
                     state.started_this_run += 1
                     return job_msg(job)
 
         elif msg['type'] == 'job_results':
+            # during transmission: serialised to tuples
+            samples = [Sample.from_encoded_tuple(s) for s in msg['samples']]
+            job = Job(**msg['job'])
+            job.config = dotdict(job.config)
 
-            if msg['job']['num'] not in state.started_job_ids:
+            if job.ID not in state.started_job_ids:
                 self._log('Non-critical error: received results from a job that was not started this run: {}'.format(msg))
 
-            elif msg['job']['num'] in self.finished_job_ids:
+            elif job.ID in self.finished_job_ids:
                 self._log('Non-critical error: received results from a job that is already finished: {}'.format(msg))
 
             else:
-                # during transmission: serialised to tuples
-                samples = [Sample(dotdict(config), cost, extra)
-                        for config, cost, extra in msg['samples']]
-                job = Job(**msg['job'])
                 self._process_job_results(job, samples)
                 state.finished_this_run += 1
 
                 # if the results are for the job that the optimiser wasn't sure
                 # whether the evaluator received successfully, then evidently it did.
-                if state.requested_job is not None and job.num == state.requested_job.num:
+                if state.requested_job is not None and job.ID == state.requested_job.ID:
                     state.requested_job = None
 
             # send acknowledgement that the results were received and not
@@ -543,37 +530,40 @@ class Optimiser(object):
                 state.finished_this_run >= state.max_jobs or
                 state.out_of_configs)
 
+    class _ServerRunState(DataHolder):
+        __slots__ = ('start_time', 'old_duration', 'max_jobs',
+                        'checkpoint_flag_was_set', 'started_this_run',
+                        'finished_this_run', 'started_job_ids',
+                        'requested_job', 'out_of_configs', 'exception_caught')
+        def run_time(self):
+            return time.time() - self.start_time
+        def num_outstanding_jobs(self):
+            return self.started_this_run - self.finished_this_run
+
     def run_server(self, host=DEFAULT_HOST, port=DEFAULT_PORT, max_jobs=inf,
                    timeout=SERVER_TIMEOUT):
         self._log('starting optimisation server at {}:{}'.format(host, port))
         self._stop_flag.clear()
 
-        class ServerRunState:
-            def __init__(self, optimiser, max_jobs):
-                self.start_time = time.time()
-                self.old_duration = optimiser.duration # duration as-of the start of this run
-                self.max_jobs = max_jobs
+        state = Optimiser._ServerRunState(
+            start_time = time.time(),
+            old_duration = self.duration, # duration as-of the start of this run
+            max_jobs = max_jobs,
+            checkpoint_flag_was_set = False, # to only log once
 
-                self.checkpoint_flag_was_set = False # to only log once
+            # count number of jobs started and finished this run
+            started_this_run = 0,
+            finished_this_run = 0,
+            started_job_ids = set(),
 
-                # count number of jobs started and finished this run
-                self.started_this_run = 0
-                self.finished_this_run = 0
-                self.started_job_ids = set()
+            # used to re-send jobs that failed to reach the evaluator. Set
+            # back to None after a request-response succeeds.
+            requested_job = None,
 
-                # used to re-send jobs that failed to reach the evaluator. Set
-                # back to None after a request-response succeeds.
-                self.requested_job = None
-
-                # flags to diagnose the stopping conditions
-                self.out_of_configs = False
-                self.exception_caught = False
-
-            def run_time(self):
-                return time.time() - self.start_time
-            def num_outstanding_jobs(self):
-                return self.started_this_run - self.finished_this_run
-        state = ServerRunState(self, max_jobs)
+            # flags to diagnose the stopping conditions
+            out_of_configs = False,
+            exception_caught = False
+        )
         self.run_state = state
 
         def should_stop():
@@ -619,6 +609,13 @@ class Optimiser(object):
         self.run_state = None
 
 
+    class _SequentialRunState(DataHolder):
+        __slots__ = ('start_time', 'old_duration', 'max_jobs',
+                        'finished_this_run', 'out_of_configs',
+                        'exception_caught')
+        def run_time(self):
+            return time.time() - self.start_time
+
     def run_sequential(self, evaluator, max_jobs=inf):
         '''
         run the optimiser with the given evaluator one job after another in the
@@ -631,21 +628,17 @@ class Optimiser(object):
             self._stop_flag.clear()
             self._log('starting sequential optimisation...')
 
-            class SequentialRunState:
-                def __init__(self, optimiser, max_jobs):
-                    self.start_time = time.time()
-                    self.old_duration = optimiser.duration # duration as-of the start of this run
-                    self.max_jobs = max_jobs
+            state = Optimiser._SequentialRunState(
+                start_time = time.time(),
+                old_duration = self.duration, # duration as-of the start of this run
+                max_jobs = max_jobs,
 
-                    self.finished_this_run = 0
+                finished_this_run = 0,
 
-                    # flags to diagnose the stopping conditions
-                    self.out_of_configs = False
-                    self.exception_caught = False
-
-                def run_time(self):
-                    return time.time() - self.start_time
-            state = SequentialRunState(self, max_jobs)
+                # flags to diagnose the stopping conditions
+                out_of_configs = False,
+                exception_caught = False
+            )
             self.run_state = state
 
 
@@ -711,11 +704,11 @@ class Optimiser(object):
         '''
         return True
 
-    def _next_configuration(self, job_num):
+    def _next_configuration(self, job_ID):
         '''
         implemented by different optimisation methods
         return the next configuration to try, or None if finished
-        job_num: the ID of the job that the configuration will be assigned to
+        job_ID: the ID of the job that the configuration will be assigned to
         '''
         raise NotImplementedError
 
@@ -1025,11 +1018,8 @@ class Optimiser(object):
         generate the dictionary to be JSON serialised and saved
         (designed to be overridden by derived classes in order to save specialised data)
         '''
-        best = self.best_sample()
-        if best is None:
-            best = Sample({}, inf)
         return {
-            'samples' : [(s.config, s.cost, JSON_encode_binary(s.extra), s.job_num) for s in self.samples],
+            'samples' : [s.to_encoded_tuple() for s in self.samples],
             'num_started_jobs' : self.num_started_jobs, # must be equal to num_finished_jobs
             'num_finished_jobs' : self.num_finished_jobs,
             'finished_job_ids' : list(self.finished_job_ids),
@@ -1037,7 +1027,7 @@ class Optimiser(object):
             'log_record' : self.log_record,
             'checkpoint_filename' : self.checkpoint_filename,
             # convenience for viewing the save, but will not be loaded
-            'best_sample' : {'config' : best.config, 'cost' : best.cost, 'extra' : best.extra, 'job_num' : best.job_num}
+            'best_sample' : (self.best_sample() or Sample({}, inf)).to_dict()
         }
 
     def _load_dict(self, save):
@@ -1045,8 +1035,7 @@ class Optimiser(object):
         load progress from a dictionary
         (designed to be overridden by derived classes in order to load specialised data)
         '''
-        self.samples = [Sample(dotdict(config), cost, JSON_decode_binary(extra), job_num)
-                        for config, cost, extra, job_num in save['samples']]
+        self.samples = [Sample.from_encoded_tuple(s) for s in save['samples']]
         self.num_started_jobs = save['num_started_jobs']
         self.num_finished_jobs = save['num_finished_jobs']
         self.finished_job_ids = set(save['finished_job_ids'])
@@ -1111,7 +1100,7 @@ class GridSearchOptimiser(Optimiser):
         # if the carry flag is true then the whole 'number' has overflowed => finished
         self.progress_overflow = carry
 
-    def _next_configuration(self, job_num):
+    def _next_configuration(self, job_ID):
         if self.progress_overflow:
             return None # done
         else:
@@ -1175,7 +1164,7 @@ class RandomSearchOptimiser(Optimiser):
         #TODO: try this. convert numpy arrays and lists to strings
         return hash(frozenset(config.items()))
 
-    def _next_configuration(self, job_num):
+    def _next_configuration(self, job_ID):
         c = self._random_config()
         if not self.allow_re_tests:
             attempts = 1
@@ -1325,7 +1314,6 @@ class BayesianOptimisationOptimiser(Optimiser):
         self.pre_samples = pre_samples
         self.close_tolerance = close_tolerance
 
-        self.params = sorted(self.ranges.keys())
         self.range_types = {param : range_type(range_) for param, range_ in self.ranges.items()}
 
         if RangeType.Arbitrary in self.range_types.values():
@@ -1362,28 +1350,52 @@ class BayesianOptimisationOptimiser(Optimiser):
         # not ready for a next configuration until the job with id ==
         # self.wait_until has been processed. Not used when allow_parallel.
         self.wait_for_job = None
-        # estimated samples for ongoing jobs. list of (job_num, Sample). Not
+        # estimated samples for ongoing jobs. list of (job_ID, Sample). Not
         # used when (not allow_parallel)
         self.hypothesised_samples = []
 
-        # a log of the Bayesian optimisation steps
-        # dict of job number to dict with values:
-        #
-        # gp: trained Gaussian process
-        # sx, sy: numpy arrays corresponding to points of samples taken thus far
-        # hx, hy: numpy arrays corresponding to _hypothesised_ points of ongoing
-        #   jobs while the step was being calculated
-        # best_sample: best sample so far
-        # next_x: next config to test
-        # next_ac: value of acquisition function evaluated at next_x (if not
-        #    chosen_at_random)
-        # chosen_at_random: whether next_x was chosen randomly rather than by
-        #   maximising the acquisition function
-        # argmax_acquisition: the next config to test (as a point) as determined
-        #   by maximising the acquisition function (different to next_x if
-        #   chosen_at_random)
         self.step_log = {}
         self.step_log_keep = 100 # max number of steps to keep
+
+    class Step(DataHolder):
+        '''
+        Data regarding a single Bayesian optimisation step.
+
+        gp: trained Gaussian process. Depending on the parallel strategy the
+            hypothesised samples may or may not be taken into account.
+        sx,sy: numpy arrays corresponding to points of samples taken thus far.
+            x = configuration as a point
+            y = true evaluated cost
+        hx,hy: numpy arrays corresponding to _hypothesised_ points of ongoing.
+            jobs while the step was being calculated.
+            x = configuration as a point
+            y = mean estimate of the surrogate function trained on all previous samples
+        best_sample: the best sample so far
+        next_x: the next configuration to test#TODO: type?
+
+        #TODO: store other data like parallel strategy so it can be changed during optimisation and still plot correctly
+        #TODO: add
+        type: pre_phase|bayes|random_fallback, the type of step describes how
+            the next configuration was chosen
+
+        next_ac: used when type=bayes|random_fallback
+            the value of the acquisition function evaluated at next_x
+            #TODO: rename to argmax_ac
+        argmax_ac: used when type=random_fallback
+            the next config to test (as a point) as determined by maximising the
+            acquisition function, may be different to next_x
+        #TODO: add
+        gp_posterior_sample: used when type=bayes|random_fallback and using TS acquisition function
+            a sample from the GP posterior which is used as an acquisition
+            function when using Thomson sampling.
+        '''
+        __slots__ = ('gp', 'sx', 'sy', 'hx', 'hy', 'best_sample', 'next_x',
+                     'chosen_at_random', 'next_ac', 'argmax_acquisition')
+        __defaults__ = {
+            'next_ac' : 0.0,
+            'argmax_ac' : 0.0
+            #'gp_posterior_sample' : None
+        }
 
     def configuration_space_size(self):
         return inf
@@ -1409,7 +1421,7 @@ class BayesianOptimisationOptimiser(Optimiser):
     def trim_step_log(self, keep=-1):
         '''
         remove old steps from the step_log to save space. Keep the N steps with
-        largest job numbers
+        largest job IDs
         keep: the number of steps to keep (-1 => keep = self.step_log_keep)
         '''
         if keep == -1:
@@ -1505,7 +1517,7 @@ class BayesianOptimisationOptimiser(Optimiser):
             best_next_x = np.clip(best_next_x, [lo for lo, hi in self.point_bounds], [hi for lo, hi in self.point_bounds])
             return best_next_x, -np.asscalar(best_neg_ac)
 
-    def _bayes_step(self, job_num):
+    def _bayes_step(self, job_ID):
         '''
         generate the next configuration to test using Bayesian optimisation
         '''
@@ -1520,18 +1532,18 @@ class BayesianOptimisationOptimiser(Optimiser):
         # as having to finish before proceeding
         if self.allow_parallel:
             # remove samples whose jobs have since finished
-            self.hypothesised_samples = [(job_num, s) for job_num, s in self.hypothesised_samples
-                                         if job_num not in self.finished_job_ids]
+            self.hypothesised_samples = [(job_ID, s) for job_ID, s in self.hypothesised_samples
+                                         if job_ID not in self.finished_job_ids]
 
             if len(self.hypothesised_samples) > 0:
                 hx = np.vstack([self.config_to_point(s.config)
-                                for job_num, s in self.hypothesised_samples])
-                hy = np.array([[s.cost] for job_num, s in self.hypothesised_samples])
+                                for job_ID, s in self.hypothesised_samples])
+                hy = np.array([[s.cost] for job_ID, s in self.hypothesised_samples])
             else:
                 hx = np.empty(shape=(0, sx.shape[1]))
                 hy = np.empty(shape=(0, 1))
         else:
-            self.wait_for_job = job_num # do not add a new job until this job has been processed
+            self.wait_for_job = job_ID # do not add a new job until this job has been processed
 
             hx = np.empty(shape=(0, sx.shape[1]))
             hy = np.empty(shape=(0, 1))
@@ -1597,24 +1609,24 @@ class BayesianOptimisationOptimiser(Optimiser):
             with WarningCatcher(log_warning):
                 est_cost = gp_model.predict(self.config_to_point(next_x))
             est_cost = np.asscalar(est_cost) # ndarray of shape=(1,1) is returned from predict()
-            self.hypothesised_samples.append((job_num, Sample(next_x, est_cost)))
+            self.hypothesised_samples.append((job_ID, Sample(next_x, est_cost, job_ID=job_ID)))
 
-
-        self.step_log[job_num] = dict(
-            gp=gp_model,
-            sx=sx, sy=sy,
-            hx=hx, hy=hy,
-            best_sample=best_sample,
-            next_x=next_x, next_ac=next_ac, # chosen_at_random => next_ac=0
-            chosen_at_random=chosen_at_random,
-            argmax_acquisition=argmax_acquisition # different to next_x when chosen_at_random
+        self.step_log[job_ID] = BayesianOptimisationOptimiser.Step(
+            gp = gp_model,
+            sx = sx, sy = sy,
+            hx = hx, hy = hy,
+            best_sample = best_sample,
+            next_x = next_x,
+            next_ac = next_ac, # chosen_at_random => next_ac=0
+            chosen_at_random = chosen_at_random,
+            argmax_acquisition = argmax_acquisition # different to next_x when chosen_at_random
         )
         self.trim_step_log()
 
         return next_x
 
 
-    def _next_configuration(self, job_num):
+    def _next_configuration(self, job_ID):
         if self.num_started_jobs < self.pre_samples:
             # still in the pre-phase where samples are chosen at random
             # make sure that each configuration is sufficiently different from all previous samples
@@ -1627,11 +1639,11 @@ class BayesianOptimisationOptimiser(Optimiser):
             if config is None: # could not find a unique configuration
                 return None # finished
             else:
-                self._log('in pre-phase: choosing random configuration {}/{}'.format(job_num, self.pre_samples))
+                self._log('in pre-phase: choosing random configuration {}/{}'.format(job_ID, self.pre_samples))
                 return config
         else:
             # Bayesian optimisation
-            return self._bayes_step(job_num)
+            return self._bayes_step(job_ID)
 
 
     @staticmethod
@@ -1894,14 +1906,14 @@ class BayesianOptimisationOptimiser(Optimiser):
         try:
             step_log_valid = (
                 all(all([
-                    is_2d(step['sx']), is_2d(step['sy']),
-                    is_2d(step['hx']), is_2d(step['hy']),
-                    np.isscalar(step['next_ac']), is_2d(step['argmax_acquisition']),
+                    is_2d(step.sx), is_2d(step.sy),
+                    is_2d(step.hx), is_2d(step.hy),
+                    np.isscalar(step.next_ac), is_2d(step.argmax_acquisition),
 
-                    eq_rows(step['sx'], step['sy']),
-                    eq_rows(step['hx'], step['hy']),
+                    eq_rows(step.sx, step.sy),
+                    eq_rows(step.hx, step.hy),
 
-                    step['hy'].shape[1] == step['sy'].shape[1] == 1,
+                    step.hy.shape[1] == step.sy.shape[1] == 1,
 
                 ]) for job_id, step in self.step_log.items())
             )
@@ -1921,32 +1933,25 @@ class BayesianOptimisationOptimiser(Optimiser):
         # redundant information and are not human readable anyway.
         # for a test run with ~40 optimisation steps, naive storage (as part of
         # step log): 1MB, separate with compression: 200KB
-        step_log = {}
+        save['step_log'] = []
         gps = {}
-        for n, s in self.step_log.items():
-            step_log[n] = {k:v for k, v in s.items() if k != 'gp'}
-            gps[n] = s['gp']
-
-        # convert the step log (dict) to an array of tuples sorted by job_num
-        step_log_copy = [(k, v.copy()) for k, v in step_log.items()]
-        save['step_log'] = sorted(step_log_copy, key=lambda s: s[0])
-        for job_num, step in save['step_log']:
-            bs = step['best_sample']
-            step['best_sample'] = (bs.config, bs.cost, JSON_encode_binary(bs.extra))
-
+        # convert the step log (dict) to an array of tuples sorted by job_ID
+        for n, s in sorted(self.step_log.items(), key=lambda x: x[0]):
+            step = {k:v for k, v in s if k != 'gp'} # convert Step to dict
+            step['best_sample'] = step['best_sample'].to_encoded_tuple()
+            save['step_log'].append((n, step))
+            gps[n] = s.gp
         save['gps'] = JSON_encode_binary(gps)
         return save
 
     def _load_dict(self, save):
         super(BayesianOptimisationOptimiser, self)._load_dict(save)
-        self.step_log = save['step_log']
 
         gps = JSON_decode_binary(save['gps'])
 
-        for n, s in self.step_log:
+        for n, s in save['step_log']:
             s['gp'] = gps[n]
-            config, cost, extra = s['best_sample']
-            s['best_sample'] = Sample(dotdict(config), cost, JSON_decode_binary(extra))
+            s['best_sample'] = Sample.from_encoded_tuple(s['best_sample'])
 
             # convert lists back to numpy arrays
             for key in ['sx', 'sy', 'hx', 'hy', 'argmax_acquisition']:
@@ -1959,7 +1964,7 @@ class BayesianOptimisationOptimiser(Optimiser):
                 s['hy'] = np.empty(shape=(0, 1))
 
         # convert list of tuples to dictionary
-        self.step_log = dict(self.step_log)
+        self.step_log = {n : BayesianOptimisationOptimiser.Step(**s) for n, s in save['step_log']}
 
         # reset any progress attributes
         self.wait_for_job = None
@@ -2012,7 +2017,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         # whether the range of the focused parameter is logarithmic
         is_log = type_ == RangeType.Logarithmic
 
-        s = dotdict(self.step_log[step])
+        s = self.step_log[step]
         all_xs = self.ranges[param]
 
         # combination of the true samples (sx, sy) and the hypothesised samples
@@ -2199,7 +2204,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         x_is_log = x_type == RangeType.Logarithmic
         y_is_log = y_type == RangeType.Logarithmic
 
-        s = dotdict(self.step_log[step])
+        s = self.step_log[step]
 
         if plot_through == 'next':
             plot_through = s.next_x
@@ -2343,7 +2348,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         count = 0
         for s in self.samples:
             is_pre_sample = s.job_num <= self.pre_samples
-            is_random = s.job_num in self.step_log.keys() and self.step_log[s.job_num]['chosen_at_random']
+            is_random = s.job_num in self.step_log.keys() and self.step_log[s.job_num].chosen_at_random
             if is_pre_sample or is_random:
                 count += 1
         return count
@@ -2366,7 +2371,7 @@ class BayesianOptimisationOptimiser(Optimiser):
             random_sample_costs = []
             for i, s in enumerate(self.samples):
                 is_pre_sample = s.job_num <= self.pre_samples
-                is_random = s.job_num in self.step_log.keys() and self.step_log[s.job_num]['chosen_at_random']
+                is_random = s.job_num in self.step_log.keys() and self.step_log[s.job_num].chosen_at_random
                 if is_pre_sample or is_random:
                     random_sample_nums.append(i+1)
                     random_sample_costs.append(s.cost)

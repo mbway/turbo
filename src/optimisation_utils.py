@@ -20,9 +20,60 @@ import numpy as np
 # for serialising Gaussian Process models for saving to disk
 import pickle
 import base64
+import copy
 import zlib
+from collections import OrderedDict
 
 
+class DataHolder(object):
+    '''
+    provides useful methods for subclasses who define __slots__.
+    Can also define a __defaults__ dict for allowing some fields to have default values.
+    Useful for classes who's only job is to hold data and don't have any methods
+    (although they may)
+
+    note: to construct from a dictionary use MyDataHolder(**some_dict) and to
+    construct from an iterable use MyDataHolder(*some_iterable)
+
+    provides similar functionality to namedtuple but DataHolder is more flexible
+    with default values and the syntax for defining the fields is different.
+
+    advantages over a regular class: less boilerplate code, usage of slots means
+    potential performance and memory improvements, also prevents attributes from
+    being added after construction. Allows default values to be specified
+    declaratively. eq, repr and iter are automatically provided. to_dict allows
+    for JSON automatic serialisation.
+    '''
+    __slots__ = ()
+    __defaults__ = {}
+    def __init__(self, *args, **kwargs):
+        # assign positional arguments
+        for i, val in enumerate(args):
+            setattr(self, self.__slots__[i], val)
+        # assign keyword arguments
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+        # assign remaining attributes with default values
+        remaining = set(self.__slots__[len(args):]) - kwargs.keys()
+        if remaining:
+            defaults = self.__class__.__defaults__
+            not_given = remaining - defaults.keys()
+            if not_given:
+                raise TypeError('__init__() missing some arguments: {}'.format(not_given))
+            for k in remaining:
+                # make a copy in case the default value is mutable
+                setattr(self, k, copy.copy(defaults[k]))
+    def to_dict(self):
+        return OrderedDict(self)
+    def to_tuple(self):
+        return tuple(v for k, v in self)
+    def __repr__(self):
+        attrs = ', '.join(k + '=' + repr(v) for k,v in self)
+        return self.__class__.__name__ + '(' + attrs + ')'
+    def __iter__(self):
+        return ((s, getattr(self, s)) for s in self.__slots__)
+    def __eq__(self, other):
+        return all(getattr(self, s) == getattr(other, s) for s in self.__slots__)
 
 class dotdict(dict):
     '''
