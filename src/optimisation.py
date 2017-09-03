@@ -542,6 +542,7 @@ class Optimiser(object):
 
     def run_server(self, host=DEFAULT_HOST, port=DEFAULT_PORT, max_jobs=inf,
                    timeout=SERVER_TIMEOUT):
+        assert self.run_state is None
         self._log('starting optimisation server at {}:{}'.format(host, port))
         self._stop_flag.clear()
 
@@ -580,7 +581,6 @@ class Optimiser(object):
                 elif outstanding_count < 0:
                     raise ValueError(outstanding_count)
 
-            # return whether the server should stop
             can_stop = state.num_outstanding_jobs() == 0
             return self._wants_to_stop(state) and can_stop
 
@@ -624,6 +624,7 @@ class Optimiser(object):
         evaluator: the Evaluator object to use to evaluate the configurations
         max_jobs: the maximum number of jobs to allow for this run (not in total)
         '''
+        assert self.run_state is None
         try:
             self._stop_flag.clear()
             self._log('starting sequential optimisation...')
@@ -1398,7 +1399,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         }
 
     def configuration_space_size(self):
-        return inf
+        return inf # continuous
 
     def _ready_for_next_configuration(self):
         if self.allow_parallel:
@@ -1477,30 +1478,29 @@ class BayesianOptimisationOptimiser(Optimiser):
                 # randomly chosen sample.
                 starting_points = np.vstack([best_next_x, starting_points])
 
-        # num_restarts may be 0 in which case this step is skipped
-        for j in range(starting_points.shape[0]):
-            starting_point = make2D_row(starting_points[j])
+            for j in range(starting_points.shape[0]):
+                starting_point = make2D_row(starting_points[j])
 
-            # result is an OptimizeResult object
-            # note: nested WarningCatchers work as expected
-            log_warning = lambda warn: self._log('warning when maximising the acquisition function: {}'.format(warn))
-            with WarningCatcher(log_warning):
-                result = scipy.optimize.minimize(
-                    fun=neg_acquisition_function,
-                    x0=starting_point,
-                    bounds=self.point_bounds,
-                    method='L-BFGS-B', # Limited-Memory Broyden-Fletcher-Goldfarb-Shanno Bounded
-                    options=dict(maxiter=15000) # maxiter=15000 is default
-                )
-            if not result.success:
-                self._log('restart {}/{} of negative acquisition minimisation failed'.format(
-                    j, starting_points.shape[0]))
-                continue
+                # note: nested WarningCatchers work as expected
+                log_warning = lambda warn: self._log('warning when maximising the acquisition function: {}'.format(warn))
+                with WarningCatcher(log_warning):
+                    # result is an OptimizeResult object
+                    result = scipy.optimize.minimize(
+                        fun=neg_acquisition_function,
+                        x0=starting_point,
+                        bounds=self.point_bounds,
+                        method='L-BFGS-B', # Limited-Memory Broyden-Fletcher-Goldfarb-Shanno Bounded
+                        options=dict(maxiter=15000) # maxiter=15000 is default
+                    )
+                if not result.success:
+                    self._log('restart {}/{} of negative acquisition minimisation failed'.format(
+                        j, starting_points.shape[0]))
+                    continue
 
-            # result.fun == negative acquisition function evaluated at result.x
-            if result.fun < best_neg_ac:
-                best_next_x = result.x # shape=(num_attribs,)
-                best_neg_ac = result.fun # shape=(1,1)
+                # result.fun == negative acquisition function evaluated at result.x
+                if result.fun < best_neg_ac:
+                    best_next_x = result.x # shape=(num_attribs,)
+                    best_neg_ac = result.fun # shape=(1,1)
 
         # acquisition function optimisation finished:
         # best_next_x = argmax(acquisition_function)
