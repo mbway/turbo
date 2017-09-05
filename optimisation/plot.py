@@ -6,6 +6,7 @@ definitions because these methods are long and just add noise)
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import matplotlib.ticker as ticker
+import matplotlib.transforms
 
 from collections import defaultdict
 from itertools import groupby
@@ -68,15 +69,15 @@ class OptimiserPlotting:
             best_x, best_cost = chooser(zip(xs, costs), key=lambda t: t[1])
 
             # move the marker out of the way.
-            offset = 10 if self.maximise_cost else -10 # pixels
-            trans = ax.transAxes.inverted() # data -> axes (0-1)
-            (_, y1), (_, y2) = trans.transform([(0, 0), (0, offset)])
-            best_cost += y2-y1
+            offset = 4.5 if self.maximise_cost else -4.5 # pt
+            offset = matplotlib.transforms.ScaledTranslation(0, offset/fig.dpi,
+                                                             fig.dpi_scale_trans)
+            trans = ax.transData + offset
 
             marker = 'v' if self.maximise_cost else '^'
             ax.plot(best_x, best_cost, marker=marker, color='#55a868',
                     markersize=10, zorder=10, markeredgecolor='black',
-                    markeredgewidth=1, label='best cost')
+                    markeredgewidth=1, label='best cost', transform=trans)
 
         if plot_each:
             ax.plot(xs, costs, marker='o', markersize=4, color='#4c72b0', label='cost')
