@@ -484,6 +484,35 @@ def interactive(loggable, run_task, log_filename=None, poll_interval=0.5):
             f.close()
 
 
+def optimiser_progress_bar(optimiser):
+    '''
+    display a progress bar in Jupyter as the optimiser runs, once the maximum
+    number of jobs has been reached, stop watching.
+    '''
+    def watch():
+        while optimiser.run_state is None:
+            time.sleep(0.2)
+
+        label = widgets.HTML()
+        bar = widgets.IntProgress(min=0, max=optimiser.run_state.max_jobs,
+                                  value=0, description='', width='100%',
+                                  bar_style='info')
+        box = widgets.VBox(children=[label, bar])
+        display(box)
+
+        while optimiser.run_state is not None:
+            bar.value = optimiser.run_state.finished_this_run
+            label.value = 'Finished Jobs: {}/{}'.format(bar.value, bar.max)
+            time.sleep(0.2)
+
+        bar.value = bar.max
+        label.value = 'Finished Jobs: {}/{}'.format(bar.value, bar.max)
+        bar.bar_style = 'success'
+
+    t = threading.Thread(target=watch)
+    t.setDaemon(True)
+    t.start()
+
 
 
 class DebugGUIs(qtc.QObject):

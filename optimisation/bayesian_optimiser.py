@@ -19,7 +19,7 @@ from .utils import *
 from .plot import BayesianOptimisationOptimiserPlotting
 
 
-class BayesianOptimisationOptimiser(Optimiser, BayesianOptimisationOptimiserPlotting):
+class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optimiser):
     '''
     Bayesian Optimisation Strategy:
     1. Sample some random initial points

@@ -14,12 +14,14 @@
 - configurable 'closeness' parameter for choosing randomly (other libraries choose randomly only on almost exact duplicates)
 - able to treat some parameters as being scaled logarithmically (where the order of magnitude matters more than the value). Support for plotting logarithmic parameters and support from the optimisers (Bayesian optimisation trains the GP on the exponents of the logarithmic values and log-linear sampling for randomly chosen samples)
 
-## https://github.com/fmfn/BayesianOptimization
-TODO
 
-## https://github.com/thuijskens/bayesian-optimization
+## Comparison
 TODO
-
+- https://github.com/fmfn/BayesianOptimization
+- https://github.com/thuijskens/bayesian-optimization
+- https://github.com/befelix/SafeOpt
+- https://github.com/scikit-optimize/scikit-optimize
+- https://hyperopt.github.io/hyperopt/
 
 
 # Contents (in chronological order) #

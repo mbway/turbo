@@ -14,6 +14,8 @@ from itertools import groupby
 from .utils import *
 from . import plot3D
 
+# note: Mixins have to be inherited in reverse, eg MyClass(Plotting, SuperClass)
+
 class OptimiserPlotting:
     '''
     A mixin for providing generic plotting capabilities to an Optimiser object
@@ -61,10 +63,23 @@ class OptimiserPlotting:
         if plot_best:
             chooser = max if self.maximise_cost else min
             best_cost = [chooser(costs[:x]) for x in xs]
-            ax.plot(xs, best_cost, color='#55a868', label='best cost')
+            ax.plot(xs, best_cost, color='#55a868')
+
+            best_x, best_cost = chooser(zip(xs, costs), key=lambda t: t[1])
+
+            # move the marker out of the way.
+            offset = 10 if self.maximise_cost else -10 # pixels
+            trans = ax.transAxes.inverted() # data -> axes (0-1)
+            (_, y1), (_, y2) = trans.transform([(0, 0), (0, offset)])
+            best_cost += y2-y1
+
+            marker = 'v' if self.maximise_cost else '^'
+            ax.plot(best_x, best_cost, marker=marker, color='#55a868',
+                    markersize=10, zorder=10, markeredgecolor='black',
+                    markeredgewidth=1, label='best cost')
 
         if plot_each:
-            ax.plot(xs, costs, color='#4c72b0', label='cost')
+            ax.plot(xs, costs, marker='o', markersize=4, color='#4c72b0', label='cost')
 
         ax.set_title('Cost Over Time', fontsize=14)
         ax.set_xlabel('samples')
@@ -560,8 +575,8 @@ class BayesianOptimisationOptimiserPlotting:
     def num_randomly_chosen(self):
         count = 0
         for s in self.samples:
-            is_pre_sample = s.job_num <= self.pre_samples
-            is_random = s.job_num in self.step_log.keys() and self.step_log[s.job_num].chosen_at_random
+            is_pre_sample = s.job_ID <= self.pre_samples
+            is_random = s.job_ID in self.step_log.keys() and self.step_log[s.job_ID].chosen_at_random
             if is_pre_sample or is_random:
                 count += 1
         return count
@@ -576,15 +591,15 @@ class BayesianOptimisationOptimiserPlotting:
         true_best: if available: plot a horizontal line for the best possible cost
         plot_random: whether to plot markers over the samples which were chosen randomly
         '''
-        fig = super(BayesianOptimisationOptimiser, self).plot_cost_over_time(plot_each, plot_best, true_best)
+        fig = OptimiserPlotting.plot_cost_over_time(self, plot_each, plot_best, true_best)
         ax = fig.axes[0]
 
         if plot_random:
             random_sample_nums = []
             random_sample_costs = []
             for i, s in enumerate(self.samples):
-                is_pre_sample = s.job_num <= self.pre_samples
-                is_random = s.job_num in self.step_log.keys() and self.step_log[s.job_num].chosen_at_random
+                is_pre_sample = s.job_ID <= self.pre_samples
+                is_random = s.job_ID in self.step_log.keys() and self.step_log[s.job_ID].chosen_at_random
                 if is_pre_sample or is_random:
                     random_sample_nums.append(i+1)
                     random_sample_costs.append(s.cost)
@@ -596,8 +611,8 @@ class BayesianOptimisationOptimiserPlotting:
             i = int(s_num)-1
             if i >= 0 and i < len(self.samples):
                 s = self.samples[i]
-                if s.job_num in self.step_log.keys():
-                    return s.job_num - self.pre_samples
+                if s.job_ID in self.step_log.keys():
+                    return s.job_ID - self.pre_samples
                 else:
                     return ''
             else:
