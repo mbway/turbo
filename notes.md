@@ -36,6 +36,11 @@
 - unfortunately, different objective functions can be fitted by different GP kernels, however without knowing the true function it is hard to determine the correct kernel to use.
 - when the GP does not fit at all and describes the variation in the data as being completely noise, this may indicate that more restarts of the GP optimiser is required
 - if you know what the surrogate function should look like then you can set the surrogate GP parameters to fixed values (eg the length scale should be the average distance between the points)
+- restrict the bounds of the WhiteKernel used for the surrogate GP to prevent it from explaining all variation as noise. May be useful to plot the noise levels throughout the optimisation to get an idea for what maximum noise level might be appropriate for the function. As a Heuristic: when normally distributed noise sigma=0.3 is added, a maximum noise level of 0.15 seems reasonable (according to one of the tested functions).
+```
+xs = [s.gp.kernel_.k2.noise_level for n, s in optimiser.step_log.items()]
+plt.plot(xs)
+```
 
 # Things I learned about networking
 - it is so much better to extract all the networking logic and abstract it when interacting with the rest of the program logic. It makes it much easier to analyse the behaviour of the protocol by reducing the number of possible execution paths
