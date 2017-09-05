@@ -1521,6 +1521,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         '''
         generate the next configuration to test using Bayesian optimisation
         '''
+        #TODO: extract to _get_data()
         # samples converted to points which can be used in calculations
         # shape=(num_samples, num_attribs)
         sx = np.vstack([self.config_to_point(s.config) for s in self.samples])
@@ -1673,7 +1674,7 @@ class BayesianOptimisationOptimiser(Optimiser):
         best_cost: the (actual) cost of the best known configuration (either
             smallest or largest depending on maximise_cost)
         xi: a parameter >0 for exploration/exploitation trade-off. Larger =>
-            more exploration. The default value of 0.01 is recommended.
+            more exploration. The default value of 0.01 is recommended.#TODO: citation needed
 
         Theory:
 
@@ -1723,8 +1724,9 @@ class BayesianOptimisationOptimiser(Optimiser):
         return EIs
 
     #TODO: should rename? make CB/UCB/LCB all refer to this function
+    # has been called lower confidence bound when minimising: https://scikit-optimize.github.io/notebooks/bayesian-optimization.html
     @staticmethod
-    def upper_confidence_bound(xs, gp_model, maximise_cost, best_cost, kappa=3.0):
+    def upper_confidence_bound(xs, gp_model, maximise_cost, best_cost, kappa=2.0):
         r'''
         upper confidence bound when maximising, lower confidence bound when minimising
         $$\begin{align*}
@@ -1739,7 +1741,9 @@ class BayesianOptimisationOptimiser(Optimiser):
         kappa: parameter which controls the trade-off between exploration and
             exploitation. Larger values favour exploration more. (geometrically,
             the uncertainty is scaled more so is more likely to look better than
-            known good locations)
+            known good locations). 'often kappa=2 is used' (Bijl et al., 2016)
+            kappa=0 => 'Expected Value' (EV) acquisition function
+            $$EV(\mathbf x)=\mu(\mathbf x)$$ (pure exploitation, not very useful)
         '''
         mus, sigmas = gp_model.predict(xs, return_std=True)
         sigmas = make2D(sigmas)
