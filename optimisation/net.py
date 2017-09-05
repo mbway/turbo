@@ -10,7 +10,7 @@ import struct
 import socket
 import hashlib
 
-from optimisation_utils import exception_string
+from .utils import exception_string
 
 
 # This is to prevent deadlock but if a socket times out then it may be fatal. At

@@ -11,8 +11,8 @@ from collections import defaultdict
 from itertools import groupby
 
 # local modules
-from optimisation_utils import *
-import plot3D
+from .utils import *
+from . import plot3D
 
 class OptimiserPlotting:
     '''

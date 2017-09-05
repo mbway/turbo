@@ -14,9 +14,9 @@ import scipy.optimize
 from scipy.stats import norm # Gaussian/normal distribution
 
 # local modules
-from optimisation import Optimiser, Sample
-from optimisation_utils import *
-from optimisation_plot import BayesianOptimisationOptimiserPlotting
+from .core import Optimiser, Sample
+from .utils import *
+from .plot import BayesianOptimisationOptimiserPlotting
 
 
 class BayesianOptimisationOptimiser(Optimiser, BayesianOptimisationOptimiserPlotting):

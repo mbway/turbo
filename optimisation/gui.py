@@ -32,7 +32,7 @@ import seaborn as sns # prettify matplotlib
 
 
 # Local imports
-import optimisation as op
+from .core import DEFAULT_HOST, DEFAULT_PORT, Evaluator, Optimiser
 
 def is_ipython():
     ''' whether the current script is running in IPython/Jupyter '''
@@ -94,9 +94,9 @@ def start_GUI(e_or_o):
     app = qt.QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
     gui = None
-    if isinstance(e_or_o, op.Evaluator):
+    if isinstance(e_or_o, Evaluator):
         gui = EvaluatorGUI(e_or_o)
-    elif isinstance(e_or_o, op.Optimiser):
+    elif isinstance(e_or_o, Optimiser):
         gui = OptimiserGUI(e_or_o)
     else:
         raise TypeError
@@ -232,7 +232,7 @@ class LoggableGUI(qt.QWidget):
 class EvaluatorGUI(LoggableGUI):
     def __init__(self, evaluator, name=None):
         super(EvaluatorGUI, self).__init__()
-        assert isinstance(evaluator, op.Evaluator)
+        assert isinstance(evaluator, Evaluator)
 
         self.evaluator = evaluator
         self.evaluator_thread = BetterQThread(target=self._run_evaluator)
@@ -245,8 +245,8 @@ class EvaluatorGUI(LoggableGUI):
         self.name = name
 
 
-        self.host = self._add_named_field('host:', op.DEFAULT_HOST)
-        self.port = self._add_named_field('port:', str(op.DEFAULT_PORT))
+        self.host = self._add_named_field('host:', DEFAULT_HOST)
+        self.port = self._add_named_field('port:', str(DEFAULT_PORT))
 
         self._add_button('Start Client', self.start)
         self._add_button('Stop Client', self.stop)
@@ -305,7 +305,7 @@ class EvaluatorGUI(LoggableGUI):
 class OptimiserGUI(LoggableGUI):
     def __init__(self, optimiser, name=None):
         super(OptimiserGUI, self).__init__()
-        assert isinstance(optimiser, op.Optimiser)
+        assert isinstance(optimiser, Optimiser)
 
         self.optimiser = optimiser
         self.optimiser_thread = BetterQThread(target=self._run_optimiser)
@@ -317,8 +317,8 @@ class OptimiserGUI(LoggableGUI):
             self.setWindowTitle('Optimiser GUI: {}'.format(name))
         self.name = name
 
-        self.host = self._add_named_field('host:', op.DEFAULT_HOST)
-        self.port = self._add_named_field('port:', str(op.DEFAULT_PORT))
+        self.host = self._add_named_field('host:', DEFAULT_HOST)
+        self.port = self._add_named_field('port:', str(DEFAULT_PORT))
         self._add_button('Start Server', self.start)
         self._add_button('Stop Server', self.stop)
         self._add_button('Force Stop', self.force_stop)
@@ -435,12 +435,12 @@ def interactive(loggable, run_task, log_filename=None, poll_interval=0.5):
     Evaluator example:
     >>> evaluator = MyEvaluator()
     >>> task = lambda: evaluator.run_client(host, port)
-    >>> op.interactive(evaluator, task, '/tmp/evaluator.log')
+    >>> op.gui.interactive(evaluator, task, '/tmp/evaluator.log')
 
     Optimiser example
     >>> optimiser = op.GridSearchOptimiser(ranges)
     >>> task = lambda: optimiser.run_server(host, port, max_jobs=20)
-    >>> op.interactive(optimiser, task, '/tmp/optimiser.log')
+    >>> op.gui.interactive(optimiser, task, '/tmp/optimiser.log')
 
     loggable: an object with a log_record attribute and stop() method
     run_task: a function to run (related to the loggable object),
@@ -535,11 +535,11 @@ class DebugGUIs(qtc.QObject):
         self.add_signal.connect(self._add, qtc.Qt.QueuedConnection)
 
         for o in self.optimisers:
-            assert isinstance(o, op.Optimiser)
+            assert isinstance(o, Optimiser)
             self._add(o)
 
         for e in self.evaluators:
-            assert isinstance(e, op.Evaluator)
+            assert isinstance(e, Evaluator)
             self._add(e)
 
         self.ready.set()
@@ -549,11 +549,11 @@ class DebugGUIs(qtc.QObject):
         '''
         e_or_o: an Evaluator or Optimiser to spawn a GUI for
         '''
-        if isinstance(e_or_o, op.Optimiser):
+        if isinstance(e_or_o, Optimiser):
             self.guis.append(OptimiserGUI(e_or_o, str(self.op_counter)))
             print('spawning optimiser GUI {}'.format(self.op_counter))
             self.op_counter += 1
-        elif isinstance(e_or_o, op.Evaluator):
+        elif isinstance(e_or_o, Evaluator):
             self.guis.append(EvaluatorGUI(e_or_o, str(self.ev_counter)))
             print('spawning evaluator GUI {}'.format(self.ev_counter))
             self.ev_counter += 1
@@ -643,12 +643,13 @@ def main():
     '''
     example of the module usage
     '''
+    from .basic_optimisers import GridSearchOptimiser
 
     ranges = {'a':[1,2], 'b':[3,4]}
-    class TestEvaluator(op.Evaluator):
+    class TestEvaluator(Evaluator):
         def test_config(self, config):
             return config.a # placeholder cost function
-    optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+    optimiser = GridSearchOptimiser(ranges, order=['a','b'])
     evaluator = TestEvaluator()
 
     app = qt.QApplication(sys.argv)

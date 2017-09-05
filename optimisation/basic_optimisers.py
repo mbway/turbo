@@ -10,8 +10,8 @@ from __future__ import unicode_literals
 import numpy as np
 
 # local modules
-from optimisation import Optimiser
-from optimisation_utils import *
+from .core import Optimiser
+from .utils import *
 
 
 class GridSearchOptimiser(Optimiser):

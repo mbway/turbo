@@ -124,3 +124,4 @@ def plotFromMPL():
     '''
     fig = plt.gcf() # Get current figure
     py.iplot_mpl(fig, show_link=False)
+

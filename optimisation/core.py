@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 '''
-The base components of the optimisation library:
+The core components of the optimisation library:
 - Job
 - Sample
 - Evaluator
@@ -22,9 +22,9 @@ from multiprocessing.dummy import Pool as ThreadPool
 import numpy as np
 
 # local modules
-import optimisation_net as op_net
-from optimisation_utils import *
-from optimisation_plot import OptimiserPlotting
+from . import net as op_net
+from .utils import *
+from .plot import OptimiserPlotting
 
 
 # constants gathered here so that the defaults can be changed easily (eg for testing)
