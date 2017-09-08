@@ -1,5 +1,4 @@
-#!/usr/bin/env python
-from __future__ import print_function
+#!/usr/bin/env python3
 '''
 Notes:
 - the tests assume that the network is relatively well behaved. When using a
@@ -17,8 +16,8 @@ for debugging the following tools are useful:
 
 - can insert the following code to mirror the logs to files:
 ```
-op_gui.LogMonitor(optimiser, '/tmp/optimiser.log').listen_async()
-op_gui.LogMonitor(evaluator, '/tmp/evaluator.log').listen_async()
+op.gui.LogMonitor(optimiser, '/tmp/optimiser.log').listen_async()
+op.gui.LogMonitor(evaluator, '/tmp/evaluator.log').listen_async()
 ```
 
 - can use `killall -SIGUSR1 python3` to signal to this process to break into pdb at any time
@@ -27,8 +26,8 @@ op_gui.LogMonitor(evaluator, '/tmp/evaluator.log').listen_async()
 
 - can use the following GUI library to monitor optimisers and evaluators as tests run
 ```
-dg = op_gui.DebugGUIs(optimiser, evaluator) # simple case
-dg = op_gui.DebugGUIs([optimiser1, optimiser2], [evaluator1, evaluator2]) # or more complex
+dg = op.gui.DebugGUIs(optimiser, evaluator) # simple case
+dg = op.gui.DebugGUIs([optimiser1, optimiser2], [evaluator1, evaluator2]) # or more complex
 
 try:
     run some tests which may fail
@@ -38,11 +37,15 @@ finally:
 ```
 
 '''
+# python 2 compatibility
+from __future__ import (absolute_import, division, print_function, unicode_literals)
+import sys
+sys.path.append('..')
+from optimisation.py2 import * # python 2 compatibility
 
 import unittest
 
 import os
-import sys
 import time
 import numpy as np
 import random
@@ -56,9 +59,7 @@ import sklearn.gaussian_process as gp
 
 # local modules
 import optimisation as op
-import optimisation_gui as op_gui
-import optimisation_net as op_net
-from optimisation_utils import DataHolder
+from optimisation.utils import DataHolder
 
 # whether to skip tests which are slow (useful when writing a new test)
 NO_SLOW_TESTS = False
@@ -71,10 +72,10 @@ unittest.TestCase.longMessage = True
 # CPU since the evaluation should be massively expensive, so there is no reason
 # to poll so quickly, however when testing most of the evaluators are trivial
 # and so finish instantly.
-op.DEFAULT_HOST = '127.0.0.1' # internal only
-op.CLIENT_TIMEOUT = 0.2
-op.SERVER_TIMEOUT = 0.4
-op.NON_CRITICAL_WAIT = 0.5
+op.core.DEFAULT_HOST = '127.0.0.1' # internal only
+op.core.CLIENT_TIMEOUT = 0.2
+op.core.SERVER_TIMEOUT = 0.4
+op.core.NON_CRITICAL_WAIT = 0.5
 
 
 
@@ -110,10 +111,10 @@ def finish_off_evaluators(timeout=0.4):
     def should_stop():
         return time.time() - start_time > timeout
     def handle_request(msg):
-        return op_net.empty_msg()
+        return op.net.empty_msg()
     def on_success(request, response):
         pass
-    op_net.message_server((op.DEFAULT_HOST, op.DEFAULT_PORT), 0.1,
+    op.net.message_server((op.core.DEFAULT_HOST, op.core.DEFAULT_PORT), 0.1,
                           should_stop, handle_request, on_success)
 
 
@@ -170,7 +171,7 @@ class NumpyCompatableTestCase(unittest.TestCase):
         try:
             unittest.TestCase.assertDictEqual(self, self.convert_np(d1), self.convert_np(d2), msg)
         except ValueError as e:
-            op.ON_EXCEPTION(e)
+            op.core.ON_EXCEPTION(e)
 
     def assertSequenceEqual(self, it1, it2, msg=None, seq_type=list):
         if seq_type == np.ndarray:
@@ -230,6 +231,22 @@ def remove_job_IDs(samples):
         s.job_ID = None
     return samples
 
+class ThreadExceptionCatcher(object):
+    ''' based on https://stackoverflow.com/a/12495927 '''
+    def _format_exc(self):
+        formated_exc = self.format_exc_backup()
+        self.exceptions.append(formated_exc)
+        return formated_exc
+
+    def __enter__(self):
+        self.exceptions = []
+        self.format_exc_backup = threading._format_exc
+        threading._format_exc = self._format_exc
+
+    def __exit__(self, type, value, traceback):
+        threading._format_exc = self.format_exc_backup
+        if self.exceptions:
+            raise Exception(self.exceptions)
 
 class TestUtils(NumpyCompatableTestCase):
     def test_dotdict(self):
@@ -609,14 +626,15 @@ class TestOptimiser(NumpyCompatableTestCase):
         optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
         evaluator = TestEvaluator()
 
-        ev_thread = threading.Thread(target=evaluator.run_client, name='evaluator')
-        ev_thread.start()
+        with ThreadExceptionCatcher():
+            ev_thread = threading.Thread(target=evaluator.run_client, name='evaluator')
+            ev_thread.start()
 
-        optimiser.run_server(max_jobs=4)
+            optimiser.run_server(max_jobs=4)
 
-        evaluator.stop()
-        finish_off_evaluators()
-        ev_thread.join()
+            evaluator.stop()
+            finish_off_evaluators()
+            ev_thread.join()
 
         no_exceptions(self, optimiser)
         no_exceptions(self, evaluator)
@@ -668,18 +686,19 @@ class TestOptimiser(NumpyCompatableTestCase):
         optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
         evaluator = TestEvaluator()
 
-        ev_thread = threading.Thread(target=evaluator.run_client, name='evaluator')
-        ev_thread.start()
 
+        with ThreadExceptionCatcher():
+            ev_thread = threading.Thread(target=evaluator.run_client, name='evaluator')
+            ev_thread.start()
 
-        optimiser.run_server(max_jobs=1)
-        self.assertEqual(optimiser.samples, to_samples([(1,3,1,1)]))
-        optimiser.run_server(max_jobs=2)
-        optimiser.run_server(max_jobs=4)
+            optimiser.run_server(max_jobs=1)
+            self.assertEqual(optimiser.samples, to_samples([(1,3,1,1)]))
+            optimiser.run_server(max_jobs=2)
+            optimiser.run_server(max_jobs=4)
 
-        evaluator.stop()
-        finish_off_evaluators()
-        ev_thread.join()
+            evaluator.stop()
+            finish_off_evaluators()
+            ev_thread.join()
 
         no_exceptions(self, optimiser)
         no_exceptions(self, evaluator)
@@ -706,22 +725,23 @@ class TestOptimiser(NumpyCompatableTestCase):
         optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
         evaluator = TestEvaluator()
 
-        op_thread = threading.Thread(target=optimiser.run_server, name='optimiser')
-        op_thread.start()
+        with ThreadExceptionCatcher():
+            op_thread = threading.Thread(target=optimiser.run_server, name='optimiser')
+            op_thread.start()
 
-        evaluator.run_client(max_jobs=1)
+            evaluator.run_client(max_jobs=1)
 
-        # wait for the optimiser to process the results
-        wait_for(lambda: len(optimiser.samples) == 1)
-        self.assertEqual(optimiser.samples, to_samples([(1,3,1,1)]))
+            # wait for the optimiser to process the results
+            wait_for(lambda: len(optimiser.samples) == 1)
+            self.assertEqual(optimiser.samples, to_samples([(1,3,1,1)]))
 
-        evaluator.run_client(max_jobs=2)
-        # optimiser does not tell clients to stop, has to be done manually from
-        # another thread or max_jobs has to be exact.
-        evaluator.run_client(max_jobs=1)
+            evaluator.run_client(max_jobs=2)
+            # optimiser does not tell clients to stop, has to be done manually from
+            # another thread or max_jobs has to be exact.
+            evaluator.run_client(max_jobs=1)
 
-        optimiser.stop()
-        op_thread.join()
+            optimiser.stop()
+            op_thread.join()
 
         no_exceptions(self, optimiser)
         no_exceptions(self, evaluator)
@@ -856,13 +876,13 @@ def get_dict(optimiser, different_run=False):
             # the stop flag may or may not be set depending on how the optimiser stopped (max_jobs or stop())
             exclude = ['log_record', 'run_state', 'duration', '_stop_flag']
         else:
-            exclude = ['run_state'] # doesn't matter if this differs
+            exclude = ['run_state', 'duration'] # doesn't matter if this differs
         d = {k:v for k, v in optimiser.__dict__.items() if k not in exclude}
 
-        if 'duration' in d.keys():
+        #if 'duration' in d.keys():
             # allow the duration to differ slightly
             # (note: ndigits is the number of decimal places, not total digits)
-            d['duration'] = round(d['duration'], ndigits=2)
+            #d['duration'] = round(d['duration'], ndigits=2)
 
         # cannot compare threading.Event objects, but what matters is their
         # set states.
@@ -948,6 +968,7 @@ class CheckpointManager:
                 print('\n\nafter =')
                 print(dstring(get_dict(self.optimiser)))
 
+            self.test_case.assertTrue(self.optimiser.duration >= op_before.duration)
             self.test_case.assertEqual(get_dict(op_before), get_dict(self.optimiser))
 
 
@@ -1056,34 +1077,40 @@ class TestCheckpoints(NumpyCompatableTestCase):
         optimiser.checkpoint_filename = cp
         cm.take_checkpoint(save_now=True, make_copy=True)
 
-        op_thread = threading.Thread(target=optimiser.run_server, name='optimiser')
-        op_thread.start()
+        with ThreadExceptionCatcher():
+            op_thread = threading.Thread(target=optimiser.run_server, name='optimiser')
+            op_thread.start()
 
-        # checkpoint after started but 0 jobs
-        cm.take_checkpoint(save_now=False, make_copy=True)
-
-        # checkpoint after some number of jobs have been completed
-        choice_counter = 0
-        choices = [1, 2, 0] # cycle through the choices
-        i = 0
-        while i < num_jobs:
-            num_to_run = min(choices[choice_counter % len(choices)], num_jobs-1)
-            choice_counter += 1
-            if num_to_run != 0:
-                evaluator.run_client(max_jobs=num_to_run) # blocks until finished
-                wait_for(lambda: optimiser.num_finished_jobs == i+num_to_run)
+            # checkpoint after started but 0 jobs
             cm.take_checkpoint(save_now=False, make_copy=True)
-            i += num_to_run
-            print_dot()
 
-        optimiser.stop()
-        op_thread.join()
+            # checkpoint after some number of jobs have been completed
+            choice_counter = 0
+            choices = [1, 2, 0] # cycle through the choices
+            i = 0
+            while i < num_jobs:
+                num_to_run = min(choices[choice_counter % len(choices)], num_jobs-1)
+                choice_counter += 1
+                if num_to_run != 0:
+                    evaluator.run_client(max_jobs=num_to_run) # blocks until finished
+                    wait_for(lambda: optimiser.num_finished_jobs == i+num_to_run)
+                cm.take_checkpoint(save_now=False, make_copy=True)
+                i += num_to_run
+                print_dot()
+
+            optimiser.stop()
+            op_thread.join()
 
         no_exceptions(self, optimiser)
         no_exceptions(self, evaluator)
 
+
         # just a sanity check
         self.assertTrue(len(cm.saved) > 4)
+
+        if isinstance(optimiser, op.BayesianOptimisationOptimiser):
+            # when porting to python 2 this was not the case because of a bug
+            self.assertEqual(len(optimiser.step_log), num_jobs-optimiser.pre_samples)
 
         # continue from the load until the end, make sure everything went fine
         # and that the end result is the same as the optimiser which was not
@@ -1175,43 +1202,44 @@ class TestCheckpoints(NumpyCompatableTestCase):
         optimiser = create_optimiser()
         cm = CheckpointManager(self, cp, optimiser, create_optimiser, num_jobs)
 
-        op_thread = threading.Thread(target=lambda: optimiser.run_server(max_jobs=num_jobs), name='optimiser')
-        op_thread.start()
+        with ThreadExceptionCatcher():
+            op_thread = threading.Thread(target=lambda: optimiser.run_server(max_jobs=num_jobs), name='optimiser')
+            op_thread.start()
 
-        e_threads = [threading.Thread(target=e.run_client, name='evaluator{}'.format(i)) for i,e in enumerate(evaluators)]
-        for t in e_threads:
-            t.start()
+            e_threads = [threading.Thread(target=e.run_client, name='evaluator{}'.format(i)) for i,e in enumerate(evaluators)]
+            for t in e_threads:
+                t.start()
 
-        # optimiser only runs for specified number of jobs
+            # optimiser only runs for specified number of jobs
 
-        # DEBUGGING NOTE: if this test deadlocks, see if the evaluators have crashed
+            # DEBUGGING NOTE: if this test deadlocks, see if the evaluators have crashed
 
-        # being cautious and only starting a checkpoint when there are
-        # definitely some more jobs to start. The specification says that
-        # nothing happens if save_when_ready() is called but the optimiser is
-        # not running, which would break take_checkpoint() because it waits
-        # indefinitely for a checkpoint to be created.
-        while op_thread.is_alive() and optimiser.num_started_jobs < num_jobs:
-            # if a copy is made, might not match since we don't know that the
-            # optimiser is currently ready to take a snapshot. Cannot compare
-            # the optimiser with the loaded checkpoint with the optimiser, since
-            # it does not stop processing.
-            cm.take_checkpoint(save_now=False, make_copy=False, compare_after_load=False)
-            print_dot()
-            if len(cm.saved) > 100:
-                time.sleep(1.0)
-            elif len(cm.saved) > 50:
-                time.sleep(0.5)
-            else:
-                time.sleep(0.1)
-            #for e in evaluators:
-                #no_exceptions(self, e)
+            # being cautious and only starting a checkpoint when there are
+            # definitely some more jobs to start. The specification says that
+            # nothing happens if save_when_ready() is called but the optimiser is
+            # not running, which would break take_checkpoint() because it waits
+            # indefinitely for a checkpoint to be created.
+            while op_thread.is_alive() and optimiser.num_started_jobs < num_jobs:
+                # if a copy is made, might not match since we don't know that the
+                # optimiser is currently ready to take a snapshot. Cannot compare
+                # the optimiser with the loaded checkpoint with the optimiser, since
+                # it does not stop processing.
+                cm.take_checkpoint(save_now=False, make_copy=False, compare_after_load=False)
+                print_dot()
+                if len(cm.saved) > 100:
+                    time.sleep(1.0)
+                elif len(cm.saved) > 50:
+                    time.sleep(0.5)
+                else:
+                    time.sleep(0.1)
+                #for e in evaluators:
+                    #no_exceptions(self, e)
 
-        # random thing I just learned (the hard way). Checking is_alive in a
-        # loop isn't good enough. You still have to use join() to ensure that
-        # the thread is completely finished and shut down (could be a caching
-        # problem?)
-        op_thread.join()
+            # random thing I just learned (the hard way). Checking is_alive in a
+            # loop isn't good enough. You still have to use join() to ensure that
+            # the thread is completely finished and shut down (could be a caching
+            # problem?)
+            op_thread.join()
 
 
         no_exceptions(self, optimiser)

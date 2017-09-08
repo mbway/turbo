@@ -1,17 +1,9 @@
 '''
 General Utilities for use with the optimiser library
 '''
-
-import sys
-if sys.version_info[0] == 3: # python 3
-    from math import isclose, inf
-elif sys.version_info[0] == 2: # python 2
-    inf = float('inf')
-    def isclose(a, b, rel_tol=1e-09, abs_tol=0.0):
-        ''' implementation from the python3 documentation '''
-        return abs(a-b) <= max(rel_tol * max(abs(a), abs(b)), abs_tol)
-else:
-    print('unsupported python version')
+# python 2 compatibility
+from __future__ import (absolute_import, division, print_function, unicode_literals)
+from .py2 import *
 
 import json
 import warnings
@@ -54,10 +46,10 @@ class DataHolder(object):
         for k, v in kwargs.items():
             setattr(self, k, v)
         # assign remaining attributes with default values
-        remaining = set(self.__slots__[len(args):]) - kwargs.keys()
+        remaining = set(self.__slots__[len(args):]) - set(kwargs.keys())
         if remaining:
             defaults = self.__class__.__defaults__
-            not_given = remaining - defaults.keys()
+            not_given = remaining - set(defaults.keys())
             if not_given:
                 raise TypeError('__init__() missing some arguments: {}'.format(not_given))
             for k in remaining:
@@ -118,7 +110,7 @@ def set_str(set_):
     '{1, 2, 3}'
 
     '''
-    return '{' + ', '.join([str(e) for e in set_]) + '}'
+    return '{' + ', '.join(str(e) for e in set_) + '}'
 
 class NumpyJSONEncoder(json.JSONEncoder):
     ''' unfortunately numpy primitives are not JSON serialisable '''
@@ -130,7 +122,7 @@ class NumpyJSONEncoder(json.JSONEncoder):
         elif isinstance(obj, np.ndarray):
             return obj.tolist()
         else:
-            return super(NumpyJSONEncoder, self).default(obj)
+            return super().default(obj)
 
 def JSON_encode_binary(data):
     '''
@@ -205,7 +197,7 @@ def config_string(config, order=None, precise=False):
     else:
         string = '{'
         for p in order:
-            if isinstance(config[p], str) or isinstance(config[p], np.str_):
+            if isinstance(val, (str, np.str_)):
                 string += '{}="{}", '.format(p, config[p])
             else: # assuming numeric
                 if precise:
@@ -233,9 +225,9 @@ def is_numeric(obj):
     if isinstance(obj, np.ndarray):
         return False
 
-    if sys.version_info[0] == 3: # python 3
+    if PY_VERSION == 3:
         attrs = ['__add__', '__sub__', '__mul__', '__truediv__', '__pow__']
-    elif sys.version_info[0] == 2: # python 2
+    elif PY_VERSION == 2:
         attrs = ['__add__', '__sub__', '__mul__', '__div__', '__pow__']
 
     return all(hasattr(obj, attr) for attr in attrs)
@@ -257,14 +249,14 @@ class WarningCatcher(warnings.catch_warnings):
         '''
         on_warning: a function which takes a warning and does something with it
         '''
-        super(WarningCatcher, self).__init__(record=True)
+        super().__init__(record=True)
         self.on_warning = on_warning
     def __enter__(self):
-        self.warning_list = super(WarningCatcher, self).__enter__()
+        self.warning_list = super().__enter__()
     def __exit__(self, *args):
         for warn in self.warning_list:
             self.on_warning(warn)
-        super(WarningCatcher, self).__exit__(*args)
+        super().__exit__(*args)
 
 
 class RangeType:

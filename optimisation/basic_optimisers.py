@@ -2,10 +2,9 @@
 '''
 Basic 'dumb' optimisers: 'grid search' and 'random search'
 '''
-# fix some of the python2 ugliness
-from __future__ import print_function
-from __future__ import division
-from __future__ import unicode_literals
+# python 2 compatibility
+from __future__ import (absolute_import, division, print_function, unicode_literals)
+from .py2 import *
 
 import numpy as np
 
@@ -25,7 +24,7 @@ class GridSearchOptimiser(Optimiser):
             appearing earlier => more 'primary' (changes more often)
             default could be any order
         '''
-        super(GridSearchOptimiser, self).__init__(ranges, maximise_cost)
+        super().__init__(ranges, maximise_cost)
         self.order = list(ranges.keys()) if order is None else order
         assert set(self.order) == set(ranges.keys())
         # start at the lower boundary for each parameter
@@ -64,13 +63,13 @@ class GridSearchOptimiser(Optimiser):
             return cur
 
     def _save_dict(self):
-        save = super(GridSearchOptimiser, self)._save_dict()
+        save = super()._save_dict()
         save['progress'] = self.progress
         save['progress_overflow'] = self.progress_overflow
         return save
 
     def _load_dict(self, save):
-        super(GridSearchOptimiser, self)._load_dict(save)
+        super()._load_dict(save)
         self.progress = save['progress']
         self.progress_overflow = save['progress_overflow']
 
@@ -93,7 +92,7 @@ class RandomSearchOptimiser(Optimiser):
             before giving up (to exhaustively explore the parameter space,
             perhaps finish off with a grid search?)
         '''
-        super(RandomSearchOptimiser, self).__init__(ranges, maximise_cost)
+        super().__init__(ranges, maximise_cost)
         self.allow_re_tests = allow_re_tests
         self.tested_configurations = set()
         self.max_retries = max_retries
@@ -103,7 +102,7 @@ class RandomSearchOptimiser(Optimiser):
         if self.allow_re_tests:
             return inf
         else:
-            return super(RandomSearchOptimiser, self).configuration_space_size()
+            return super().configuration_space_size()
 
     def _random_config(self):
         return {param : np.random.choice(param_range) for param, param_range in self.ranges.items()}
@@ -135,7 +134,7 @@ class RandomSearchOptimiser(Optimiser):
         return c
 
     def _load_dict(self, save):
-        super(RandomSearchOptimiser, self)._load_dict(save)
+        super()._load_dict(save)
         if not self.allow_re_tests:
             self.tested_configurations = set([self._hash_config(s.config) for s in self.samples])
 

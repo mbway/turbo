@@ -3,6 +3,10 @@
 Plotting methods for Optimiser objects (extracted from the main class
 definitions because these methods are long and just add noise)
 '''
+# python 2 compatibility
+from __future__ import (absolute_import, division, print_function, unicode_literals)
+from .py2 import *
+
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import matplotlib.ticker as ticker

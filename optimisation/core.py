@@ -6,10 +6,9 @@ The core components of the optimisation library:
 - Evaluator
 - Optimiser (Base class)
 '''
-# fix some of the python2 ugliness
-from __future__ import print_function
-from __future__ import division
-from __future__ import unicode_literals
+# python 2 compatibility
+from __future__ import (absolute_import, division, print_function, unicode_literals)
+from .py2 import *
 
 import time
 import json
@@ -42,7 +41,6 @@ def ON_EXCEPTION(e):
     Can be used to ignore, re-raise, drop into debugger etc
     '''
     print(exception_string(), flush=True)
-    #print(exception_string())
     #raise e
     import pdb
     pdb.set_trace()
@@ -302,7 +300,7 @@ class Evaluator(object):
         raise NotImplementedError
 
 
-class Optimiser(OptimiserPlotting):
+class Optimiser(OptimiserPlotting, object):
     '''
     given a search space and a function to call in order to evaluate the cost at
     a given location, find the minimum of the function in the search space.
@@ -820,8 +818,8 @@ class Optimiser(OptimiserPlotting):
             filename = name + str(count) + ext
             self._log('writing to "{}" instead'.format(filename))
 
-        save = json.dumps(self._save_dict(), sort_keys=True, cls=NumpyJSONEncoder)
-        with open(filename, 'w') as f:
+        save = json.dumps(self._save_dict(), sort_keys=True, cls=NumpyJSONEncoder).encode('utf-8')
+        with open(filename, 'wb') as f:
             f.write(save)
 
         assert self._consistent_and_quiescent()
@@ -839,9 +837,9 @@ class Optimiser(OptimiserPlotting):
         '''
         filename = filename if filename is not None else self.checkpoint_filename
 
-        with open(filename, 'r') as f:
+        with open(filename, 'rb') as f:
             try:
-                save = json.loads(f.read())
+                save = json.loads(f.read().decode('utf-8'))
             except json.JSONDecodeError as e:
                 self._log('exception: invalid checkpoint! Cannot load JSON: {}'.format(exception_string()))
                 ON_EXCEPTION(e)

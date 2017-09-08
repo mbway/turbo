@@ -1,18 +1,15 @@
 # Plotly imports
-import plotly.offline as py
+import plotly.offline as ply
 import plotly.graph_objs as go
 
-def running_in_ipython():
-    try:
-        __IPYTHON__
-        return True
-    except NameError:
-        return False
-# connected = whether to use CDN or load offline from the version stored in the
-# python module
-if running_in_ipython():
-    print('setting up plotly for ipython')
-    py.init_notebook_mode(connected=True)
+# local imports
+from .gui import in_jupyter
+
+if in_jupyter():
+    print('Setting up plotly for Jupyter')
+    # connected = whether to use CDN or load offline from the version stored in
+    # the python module.
+    ply.init_notebook_mode(connected=True)
 
 # Other imports
 import ipywidgets as widgets
@@ -49,7 +46,7 @@ def surface3D(x, y, z, tooltips=None, axes_names=['x','y','z'], log_axes=(False,
     )
     fig = go.Figure(data=data, layout=layout)
     # show_link is a link to export to the 'plotly cloud'
-    py.iplot(fig, show_link=False)
+    ply.iplot(fig, show_link=False)
 
 def scatter3D(x,y,z, interactive=False, color_by='z', markersize=5, tooltips=None, axes_names=['x','y','z'], log_axes=(False,False,False)):
     '''
@@ -99,7 +96,7 @@ def scatter3D(x,y,z, interactive=False, color_by='z', markersize=5, tooltips=Non
     if interactive:
         def plot(val):
             fig['data'][0].update(x=x[:val], y=y[:val], z=z[:val])
-            py.iplot(fig, show_link=False)
+            ply.iplot(fig, show_link=False)
 
         # continuous_update = if the slider moves from 0 to 100, then call the
         # update function with every value from 0 to 100
@@ -108,7 +105,7 @@ def scatter3D(x,y,z, interactive=False, color_by='z', markersize=5, tooltips=Non
         slider.description = 'Showing n Samples: '
         widgets.interact(plot, val=slider)
     else:
-        py.iplot(fig, show_link=False)
+        ply.iplot(fig, show_link=False)
 
 def MPL_surface3D(X, Y, Z):
     # note: use %matplotlib tk to open 3D plots interactively
@@ -123,5 +120,5 @@ def plotFromMPL():
         take the current matplotlib plot and instead render it with plotly
     '''
     fig = plt.gcf() # Get current figure
-    py.iplot_mpl(fig, show_link=False)
+    ply.iplot_mpl(fig, show_link=False)
 

@@ -2,10 +2,9 @@
 '''
 The Bayesian Optimisation specific code
 '''
-# fix some of the python2 ugliness
-from __future__ import print_function
-from __future__ import division
-from __future__ import unicode_literals
+# python 2 compatibility
+from __future__ import (absolute_import, division, print_function, unicode_literals)
+from .py2 import *
 
 import numpy as np
 
@@ -91,7 +90,7 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
             server with multiple client evaluators).
         '''
         ranges = {param:np.array(range_) for param, range_ in ranges.items()} # numpy arrays are required
-        super(BayesianOptimisationOptimiser, self).__init__(ranges, maximise_cost)
+        super().__init__(ranges, maximise_cost)
 
         self.acquisition_function_params = ({} if acquisition_function_params is None
                                             else acquisition_function_params)
@@ -367,13 +366,13 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
         # as having to finish before proceeding
         if self.allow_parallel:
             # remove samples whose jobs have since finished
-            self.hypothesised_samples = [(job_ID, s) for job_ID, s in self.hypothesised_samples
-                                         if job_ID not in self.finished_job_ids]
+            self.hypothesised_samples = [(ID, s) for ID, s in self.hypothesised_samples
+                                         if ID not in self.finished_job_ids]
 
             if len(self.hypothesised_samples) > 0:
                 hx = np.vstack([self.config_to_point(s.config)
-                                for job_ID, s in self.hypothesised_samples])
-                hy = np.array([[s.cost] for job_ID, s in self.hypothesised_samples])
+                                for ID, s in self.hypothesised_samples])
+                hy = np.array([[s.cost] for ID, s in self.hypothesised_samples])
             else:
                 hx = np.empty(shape=(0, sx.shape[1]))
                 hy = np.empty(shape=(0, 1))
@@ -446,6 +445,7 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
             est_cost = np.asscalar(est_cost) # ndarray of shape=(1,1) is returned from predict()
             self.hypothesised_samples.append((job_ID, Sample(next_x, est_cost, job_ID=job_ID)))
 
+        assert job_ID not in self.step_log.keys()
         self.step_log[job_ID] = BayesianOptimisationOptimiser.Step(
             gp = gp_model,
             sx = sx, sy = sy,
@@ -722,7 +722,7 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
 
     def _consistent_and_quiescent(self):
         # super class checks general properties
-        sup = super(BayesianOptimisationOptimiser, self)._consistent_and_quiescent()
+        sup = super()._consistent_and_quiescent()
         # either not waiting for a job, or waiting for a job which has finished
         not_waiting = (
             self.wait_for_job is None or
@@ -762,7 +762,7 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
         return sup and not_waiting and no_hypotheses and step_log_valid
 
     def _save_dict(self):
-        save = super(BayesianOptimisationOptimiser, self)._save_dict()
+        save = super()._save_dict()
 
         # hypothesised samples and wait_for_job are not needed to be saved since
         # the optimiser should be quiescent
@@ -783,7 +783,7 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
         return save
 
     def _load_dict(self, save):
-        super(BayesianOptimisationOptimiser, self)._load_dict(save)
+        super()._load_dict(save)
 
         gps = JSON_decode_binary(save['gps'])
 

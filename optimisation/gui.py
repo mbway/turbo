@@ -3,21 +3,37 @@
 GUI utilities to be used with the optimisation module.
 Qt GUIs as well as Jupyter/IPython and console interaction utilities
 '''
-from __future__ import print_function
+# python 2 compatibility
+from __future__ import (absolute_import, division, print_function, unicode_literals)
+from .py2 import *
+
+try:
+    if PY_VERSION == 3:
+        import PyQt5.QtCore as qtc
+        import PyQt5.QtGui as qtg
+        import PyQt5.QtWidgets as qt
+        QT_VERSION = 5
+    elif PY_VERSION == 2:
+        # Qt5 is not available in python 2
+        import PyQt4.QtCore as qtc
+        import PyQt4.QtGui as qtg
+        qt = qtg # bit of a hack but seems to work
+        QT_VERSION = 4
+except ImportError:
+    print('failed to import Qt. The other GUI features will still work')
+    # provide dummy placeholders for the Qt stuff used at the global scope (eg
+    # for inheritance) Obviously attempting to _use_ those classes will fail
+    class qt:
+        QWidget   = object
+        QTextEdit = object
+    class qtc:
+        QObject = object
+        QThread = object
+        @staticmethod
+        def pyqtSignal(types, name=None):
+            return None
 
 import sys
-if sys.version_info[0] == 3: # python 3
-    import PyQt5.QtCore as qtc
-    import PyQt5.QtGui as qtg
-    import PyQt5.QtWidgets as qt
-elif sys.version_info[0] == 2: # python 2
-    # Qt5 is not available in python 2
-    import PyQt4.QtCore as qtc
-    import PyQt4.QtGui as qt
-    import PyQt4.QtGui as qtg
-else:
-    print('unsupported python version')
-
 import time
 import signal
 import threading
@@ -34,7 +50,7 @@ import seaborn as sns # prettify matplotlib
 # Local imports
 from .core import DEFAULT_HOST, DEFAULT_PORT, Evaluator, Optimiser
 
-def is_ipython():
+def in_jupyter():
     ''' whether the current script is running in IPython/Jupyter '''
     try:
         __IPYTHON__
@@ -42,12 +58,20 @@ def is_ipython():
         return False
     return True
 
+
+if in_jupyter():
+    print('Setting up GUI for Jupyter')
+    # hide scroll bars that sometimes appear (by chance) because the image fills
+    # the entire sub-area
+    display(HTML('''<style>div.output_subarea.output_png{overflow:hidden;}</style>'''))
+
+
 class BetterQThread(qtc.QThread):
     '''
     construct a QThread using a similar API to the threading module
     '''
     def __init__(self, target, args=None):
-        super(BetterQThread, self).__init__()
+        super().__init__()
         self.args = [] if args is None else args
         self.target = target
     def run(self):
@@ -114,7 +138,7 @@ def indent(text, indentation=1):
 
 class LoggableGUI(qt.QWidget):
     def __init__(self):
-        super(LoggableGUI, self).__init__()
+        super().__init__()
 
         self.label_font = qtg.QFont(qtg.QFont().defaultFamily(), 10)
 
@@ -125,7 +149,13 @@ class LoggableGUI(qt.QWidget):
         self.log = ScrollTextEdit()
         self.log.setReadOnly(True)
         self.log.setLineWrapMode(qt.QTextEdit.NoWrap)
-        self.log.setFont(qtg.QFontDatabase.systemFont(qtg.QFontDatabase.FixedFont))
+        if QT_VERSION == 5:
+            # introduced in 5.2
+            self.log.setFont(qtg.QFontDatabase.systemFont(qtg.QFontDatabase.FixedFont))
+        else:
+            f = qtg.QFont('Monospace')
+            f.setStyleHint(qtg.QFont.TypeWriter)
+            self.log.setFont(f)
         grid.addWidget(self.log, 0, 0)
 
         self.watcher = qtc.QTimer()
@@ -195,7 +225,8 @@ class LoggableGUI(qt.QWidget):
             elif v is not None and k in expand:
                 s += '{}:\n{}\n\n'.format(k, indent(self._raw_string(v.__dict__, [], [])))
             else:
-                if isinstance(v, threading.Event):
+                event_class = threading.Event if PY_VERSION == 3 else threading._Event
+                if isinstance(v, event_class):
                     v = '{}: set={}'.format(type(v), v.is_set())
                 elif isinstance(v, list):
                     list_str = '[\n' + ',\n'.join(['\t' + str(x) for x in v]) + '\n]'
@@ -231,7 +262,7 @@ class LoggableGUI(qt.QWidget):
 
 class EvaluatorGUI(LoggableGUI):
     def __init__(self, evaluator, name=None):
-        super(EvaluatorGUI, self).__init__()
+        super().__init__()
         assert isinstance(evaluator, Evaluator)
 
         self.evaluator = evaluator
@@ -304,7 +335,7 @@ class EvaluatorGUI(LoggableGUI):
 
 class OptimiserGUI(LoggableGUI):
     def __init__(self, optimiser, name=None):
-        super(OptimiserGUI, self).__init__()
+        super().__init__()
         assert isinstance(optimiser, Optimiser)
 
         self.optimiser = optimiser
@@ -535,7 +566,7 @@ class DebugGUIs(qtc.QObject):
         optimisers: may be either a list or a single optimiser
         evaluators: may be either a list or a single evaluator
         '''
-        super(DebugGUIs, self).__init__()
+        super().__init__()
         self.optimisers = self._ensure_list(optimisers)
         self.evaluators = self._ensure_list(evaluators)
         self.guis = []
@@ -656,16 +687,6 @@ def list_slider(list_, function, slider_name='Item N: '):
     slider.description = slider_name
     widgets.interact(lambda val: function(list_[val-1]), val=slider)
     return slider
-
-
-def Jupyter_setup():
-    print('setting up GUI for Jupyter')
-    # hide scroll bars that sometimes appear (by chance) because the image fills
-    # the entire sub-area
-    display(HTML('''<style>div.output_subarea.output_png{overflow:hidden;}</style>'''))
-
-if is_ipython():
-    Jupyter_setup()
 
 
 def main():

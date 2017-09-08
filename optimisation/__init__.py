@@ -1,4 +1,6 @@
 
+from .py2 import * # python 2 compatibility
+
 from .utils import *
 from .core import Job, Sample, Evaluator, Optimiser
 from .basic_optimisers import GridSearchOptimiser, RandomSearchOptimiser

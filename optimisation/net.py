@@ -2,7 +2,9 @@
 '''
 Networking utilities for the optimiser library
 '''
-from __future__ import print_function
+# python 2 compatibility
+from __future__ import (absolute_import, division, print_function, unicode_literals)
+from .py2 import *
 
 import time
 import json
