@@ -2,8 +2,13 @@
 import plotly.offline as ply
 import plotly.graph_objs as go
 
-# local imports
-from .gui import in_jupyter
+def in_jupyter():
+    ''' whether the current script is running in IPython/Jupyter '''
+    try:
+        __IPYTHON__
+    except NameError:
+        return False
+    return True
 
 if in_jupyter():
     print('Setting up plotly for Jupyter')
