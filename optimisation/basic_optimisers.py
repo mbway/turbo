@@ -12,13 +12,14 @@ import numpy as np
 from .core import Optimiser
 from .utils import *
 
+#TODO: rename to simple_optimisers.py
 
 class GridSearchOptimiser(Optimiser):
     '''
         Grid search optimisation strategy: search with some step size over each
         dimension to find the best configuration
     '''
-    def __init__(self, ranges, maximise_cost=False, order=None):
+    def __init__(self, ranges, maximise_cost, order=None):
         '''
         order: the precedence/importance of the parameters (or None for default)
             appearing earlier => more 'primary' (changes more often)
@@ -79,7 +80,7 @@ class RandomSearchOptimiser(Optimiser):
         parameters until either a certain number of samples are taken or all
         combinations have been tested.
     '''
-    def __init__(self, ranges, maximise_cost=False, allow_re_tests=False,
+    def __init__(self, ranges, maximise_cost, allow_re_tests=False,
                  max_retries=10000):
         '''
         allow_re_tests: whether a configuration should be tested again if it has

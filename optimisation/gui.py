@@ -515,10 +515,12 @@ def interactive(loggable, run_task, log_filename=None, poll_interval=0.5):
             f.close()
 
 
-def optimiser_progress_bar(optimiser):
+def optimiser_progress_bar(optimiser, close_when_complete=False):
     '''
     display a progress bar in Jupyter as the optimiser runs, once the maximum
     number of jobs has been reached, stop watching.
+    close_when_complete: whether to leave the progress bar in place or delete
+        it once the optimiser finishes.
     '''
     def watch():
         while optimiser.run_state is None:
@@ -536,9 +538,12 @@ def optimiser_progress_bar(optimiser):
             label.value = 'Finished Jobs: {}/{}'.format(bar.value, bar.max)
             time.sleep(0.2)
 
-        bar.value = bar.max
-        label.value = 'Finished Jobs: {}/{}'.format(bar.value, bar.max)
-        bar.bar_style = 'success'
+        if close_when_complete:
+            box.close()
+        else:
+            bar.value = bar.max
+            label.value = 'Finished Jobs: {}/{}'.format(bar.value, bar.max)
+            bar.bar_style = 'success'
 
     t = threading.Thread(target=watch)
     t.setDaemon(True)
@@ -659,7 +664,7 @@ def step_log_slider(optimiser, function, pre_compute=False):
         saved[s] = Image(data=img.getvalue(), format='png', width='100%')
 
     def show_step(s):
-        if s not in saved.keys():
+        if s not in saved:
             # if function returns None then use the current figure
             fig = function(s, optimiser.step_log[s]) or plt.gcf()
             save_fig(s, fig) # memoise

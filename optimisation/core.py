@@ -307,7 +307,7 @@ class Optimiser(OptimiserPlotting, object):
 
     Importantly: an expression for the cost function is not required
     '''
-    def __init__(self, ranges, maximise_cost=False):
+    def __init__(self, ranges, maximise_cost):#TODO: replace maximise_cost with optimal_value='max'|'min'
         '''
         ranges: dictionary of parameter names and their ranges (numpy arrays, can be created by np.linspace or np.logspace)
         maximise_cost: True => higher cost is better. False => lower cost is better
@@ -444,7 +444,7 @@ class Optimiser(OptimiserPlotting, object):
         state: the optimiser run_state
         return: the data for the reply message to the client
         '''
-        assert 'type' in msg.keys(), 'malformed request: {}'.format(msg)
+        assert 'type' in msg, 'malformed request: {}'.format(msg)
 
         def job_msg(job):
             return op_net.encode_JSON(job.to_dict(), encoder=NumpyJSONEncoder)

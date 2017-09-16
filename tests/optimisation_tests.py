@@ -91,11 +91,22 @@ TEST_GP_PARAMS = {
     'kernel': gp.kernels.ConstantKernel(1.0, constant_value_bounds='fixed') * \
               gp.kernels.RBF(length_scale=1.0, length_scale_bounds='fixed'),
     'n_restarts_optimizer':0, # nothing to train, parameters are fixed
+    'optimizer' : None,
     'normalize_y':True,
     'copy_X_train':True
 }
-#TODO: change when all acquisition function parameters change. lower number of restarts for maximisation
-TEST_AC_PARAMS = {}
+TEST_MAXIMISATION = {
+    'num_random' : 500,
+    'num_grad_restarts' : 5,
+    'take_best_random' : 2
+}
+TEST_ACQ = op.AcquisitionStrategy(
+    pre_phase_steps = 2,
+    acquisition_function = 'UCB',
+    GP_hyperparameter_strategy = 'optimise',
+    parallel_strategy = 'KB',
+    random_proportion = 0
+)
 
 def finish_off_evaluators(timeout=0.4):
     '''
@@ -301,27 +312,27 @@ class TestUtils(NumpyCompatableTestCase):
         self.assertRaises(AssertionError, op.config_string, {'a':1,'b':2}, order=['a']) # if order is given, must list all keys
 
     def test_range_type(self):
-        self.assertEqual(op.range_type(np.linspace(1, 10, num=12)), 'linear')
-        self.assertEqual(op.range_type(np.linspace(10, 1, num=12)), 'linear') # can be in descending order
-        self.assertEqual(op.range_type(np.array([1,2,3])), 'linear')
-        self.assertEqual(op.range_type(np.array([0,10])), 'linear') # can be 2 points
-        self.assertEqual(op.range_type(np.logspace(1, 10, num=2)), 'linear') # need at least 3 points to determine logarithmic
+        self.assertEqual(op.range_type(np.linspace(1, 10, num=12)), op.RangeType.Linear)
+        self.assertEqual(op.range_type(np.linspace(10, 1, num=12)), op.RangeType.Linear) # can be in descending order
+        self.assertEqual(op.range_type(np.array([1,2,3])), op.RangeType.Linear)
+        self.assertEqual(op.range_type(np.array([0,10])), op.RangeType.Linear) # can be 2 points
+        self.assertEqual(op.range_type(np.logspace(1, 10, num=2)), op.RangeType.Linear) # need at least 3 points to determine logarithmic
 
-        self.assertEqual(op.range_type(np.logspace(1, 10, num=12)), 'logarithmic')
-        self.assertEqual(op.range_type(np.logspace(10, 1, num=12)), 'logarithmic') # can be in descending order
-        self.assertEqual(op.range_type(np.logspace(1, 10, num=12, base=14)), 'logarithmic') # can be any base
+        self.assertEqual(op.range_type(np.logspace(1, 10, num=12)), op.RangeType.Logarithmic)
+        self.assertEqual(op.range_type(np.logspace(10, 1, num=12)), op.RangeType.Logarithmic) # can be in descending order
+        self.assertEqual(op.range_type(np.logspace(1, 10, num=12, base=14)), op.RangeType.Logarithmic) # can be any base
 
-        self.assertEqual(op.range_type(np.array([1, 1])), 'arbitrary')
-        self.assertEqual(op.range_type(np.array([0, 0])), 'arbitrary')
-        self.assertEqual(op.range_type(np.array([1, 1, 1, 1])), 'arbitrary')
-        self.assertEqual(op.range_type(np.array([0, 0, 0, 0])), 'arbitrary')
-        self.assertEqual(op.range_type(np.array([5, 5, 5, 5])), 'arbitrary')
-        self.assertEqual(op.range_type(np.array([12, 1, 10])), 'arbitrary')
-        self.assertEqual(op.range_type(np.array([])), 'arbitrary')
-        self.assertEqual(op.range_type(np.array(["hi", "there"])), 'arbitrary')
+        self.assertEqual(op.range_type(np.array([1, 1])), op.RangeType.Arbitrary)
+        self.assertEqual(op.range_type(np.array([0, 0])), op.RangeType.Arbitrary)
+        self.assertEqual(op.range_type(np.array([1, 1, 1, 1])), op.RangeType.Arbitrary)
+        self.assertEqual(op.range_type(np.array([0, 0, 0, 0])), op.RangeType.Arbitrary)
+        self.assertEqual(op.range_type(np.array([5, 5, 5, 5])), op.RangeType.Arbitrary)
+        self.assertEqual(op.range_type(np.array([12, 1, 10])), op.RangeType.Arbitrary)
+        self.assertEqual(op.range_type(np.array([])), op.RangeType.Arbitrary)
+        self.assertEqual(op.range_type(np.array(["hi", "there"])), op.RangeType.Arbitrary)
 
-        self.assertEqual(op.range_type(np.array(["hi"])), 'constant')
-        self.assertEqual(op.range_type(np.array([1])), 'constant')
+        self.assertEqual(op.range_type(np.array(["hi"])), op.RangeType.Constant)
+        self.assertEqual(op.range_type(np.array([1])), op.RangeType.Constant)
 
     def test_is_numeric(self):
         self.assertTrue(op.is_numeric(1))
@@ -372,19 +383,14 @@ class TestUtils(NumpyCompatableTestCase):
         c_point_dist = uniform(loc=np.log(cmin), scale=np.log(cmax)-np.log(cmin))
         b = 4
         ranges = {'a':np.linspace(amin, amax), 'b':[b], 'c':op.logspace(cmin, cmax)}
-        opt = op.BayesianOptimisationOptimiser(ranges)
+        opt = op.BayesianOptimisationOptimiser(ranges, maximise_cost=False, acquisition_strategy=TEST_ACQ, maximisation_args=TEST_MAXIMISATION)
 
         num_points = 100000
-        random_cfgs = [opt._random_config() for _ in range(num_points)]
-        random_points = opt._random_config_points(num_points)
+        random_points = opt.point_space.random_points(num_points)
         self.assertEqual(random_points.shape, (num_points, 2)) # exclude b constant parameter
         print_dot()
 
         # make sure that each parameter has a legal value (in range)
-        for c in random_cfgs:
-            self.assertTrue(amin <= c.a <= amax)
-            self.assertEqual(c.b, b)
-            self.assertTrue(cmin <= c.c <= cmax)
         for row in random_points:
             self.assertTrue(amin <= row[0] <= amax)
             # note: the values for the points should be
@@ -392,8 +398,10 @@ class TestUtils(NumpyCompatableTestCase):
         print_dot()
 
         # make sure that converting between points and configurations works correctly
-        converted = [opt.point_to_config(opt.config_to_point(c)) for c in random_cfgs]
-        self.assertEqual(random_cfgs, converted)
+        converted = np.vstack(opt.point_space.config_to_point(
+                        opt.point_space.point_to_config(
+                            op.make2D_row(p))) for p in random_points)
+        self.assertTrue(np.all(np.isclose(random_points, converted, rtol=1e-10, atol=1e-10)))
         print_dot()
 
         # make sure that the mean values of each parameter is similar
@@ -403,11 +411,9 @@ class TestUtils(NumpyCompatableTestCase):
             self.assertTrue(abs(statistics.mean(samples)-mu) <= tol)
             self.assertTrue(abs(statistics.stdev(samples)-sigma) <= tol)
 
-        check([c.a for c in random_cfgs], a_dist.mean(), a_dist.std())
-        print_dot()
         check([row[0] for row in random_points], a_dist.mean(), a_dist.std())
         print_dot()
-        check([opt.point_to_config(op.make2D_row(row)).a for row in random_points], a_dist.mean(), a_dist.std())
+        check([opt.point_space.point_to_config(op.make2D_row(row)).a for row in random_points], a_dist.mean(), a_dist.std())
         print_dot()
 
         r'''
@@ -429,11 +435,9 @@ class TestUtils(NumpyCompatableTestCase):
         c_mu = (b-a)/(lb-la)
         c_E_xsq = (b**2-a**2)/(2*(lb-la))
         c_stddev = np.sqrt(c_E_xsq - c_mu)
-        check([c.c for c in random_cfgs], c_mu, c_stddev, tol=0.05*cmax)
-        print_dot()
         check([row[1] for row in random_points], c_point_dist.mean(), c_point_dist.std())
         print_dot()
-        check([opt.point_to_config(op.make2D_row(row)).c for row in random_points], c_mu, c_stddev, tol=0.05*cmax)
+        check([opt.point_space.point_to_config(op.make2D_row(row)).c for row in random_points], c_mu, c_stddev, tol=0.05*cmax)
         print_dot()
 
 
@@ -444,7 +448,7 @@ class TestOptimiser(NumpyCompatableTestCase):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+        optimiser = op.GridSearchOptimiser(ranges, maximise_cost=False, order=['a','b'])
         evaluator = TestEvaluator()
 
         self.assertEqual(optimiser.best_sample(), None)
@@ -495,7 +499,7 @@ class TestOptimiser(NumpyCompatableTestCase):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        optimiser = op.GridSearchOptimiser(ranges, order=['b','a'])
+        optimiser = op.GridSearchOptimiser(ranges, maximise_cost=False, order=['b','a'])
         evaluator = TestEvaluator()
 
         optimiser.run_sequential(evaluator)
@@ -518,7 +522,7 @@ class TestOptimiser(NumpyCompatableTestCase):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+        optimiser = op.GridSearchOptimiser(ranges, maximise_cost=False, order=['a','b'])
         evaluator = TestEvaluator()
 
         optimiser.run_sequential(evaluator)
@@ -537,7 +541,7 @@ class TestOptimiser(NumpyCompatableTestCase):
             def test_config(self, config):
                 return 123 # placeholder cost function
 
-        optimiser = op.GridSearchOptimiser(ranges, order=[])
+        optimiser = op.GridSearchOptimiser(ranges, maximise_cost=False, order=[])
         evaluator = TestEvaluator()
 
         optimiser.run_sequential(evaluator)
@@ -552,7 +556,7 @@ class TestOptimiser(NumpyCompatableTestCase):
     def test_empty_range_Bayes(self):
         ranges = {}
         # not allowed arbitrary ranges
-        self.assertRaises(ValueError, op.BayesianOptimisationOptimiser, ranges)
+        self.assertRaises(ValueError, op.BayesianOptimisationOptimiser, ranges, True, TEST_ACQ)
 
     def test_simple_random(self):
         # there is a very small chance that this will fail because after 100
@@ -567,7 +571,7 @@ class TestOptimiser(NumpyCompatableTestCase):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        optimiser = op.RandomSearchOptimiser(ranges, allow_re_tests=allow_re_tests)
+        optimiser = op.RandomSearchOptimiser(ranges, maximise_cost=False, allow_re_tests=allow_re_tests)
         evaluator = TestEvaluator()
 
         optimiser.run_sequential(evaluator, max_jobs=100)
@@ -623,7 +627,7 @@ class TestOptimiser(NumpyCompatableTestCase):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+        optimiser = op.GridSearchOptimiser(ranges, maximise_cost=False, order=['a','b'])
         evaluator = TestEvaluator()
 
         with ThreadExceptionCatcher():
@@ -654,7 +658,7 @@ class TestOptimiser(NumpyCompatableTestCase):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+        optimiser = op.GridSearchOptimiser(ranges, maximise_cost=False, order=['a','b'])
         evaluator = TestEvaluator()
 
         optimiser.run_sequential(evaluator, max_jobs=1)
@@ -683,7 +687,7 @@ class TestOptimiser(NumpyCompatableTestCase):
             return [op.Sample({'a':a, 'b':b}, cost, job_ID=job_ID)
                     for a, b, cost, job_ID in l]
 
-        optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+        optimiser = op.GridSearchOptimiser(ranges, maximise_cost=False, order=['a','b'])
         evaluator = TestEvaluator()
 
 
@@ -722,7 +726,7 @@ class TestOptimiser(NumpyCompatableTestCase):
             return [op.Sample({'a':a, 'b':b}, cost, job_ID=job_ID)
                     for a, b, cost, job_ID in l]
 
-        optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+        optimiser = op.GridSearchOptimiser(ranges, maximise_cost=False, order=['a','b'])
         evaluator = TestEvaluator()
 
         with ThreadExceptionCatcher():
@@ -758,8 +762,8 @@ class TestOptimiser(NumpyCompatableTestCase):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        optimiser1 = op.GridSearchOptimiser(ranges, order=['a','b'])
-        optimiser2 = op.GridSearchOptimiser(ranges, order=['a','b'])
+        optimiser1 = op.GridSearchOptimiser(ranges, maximise_cost=False, order=['a','b'])
+        optimiser2 = op.GridSearchOptimiser(ranges, maximise_cost=False, order=['a','b'])
         evaluator = TestEvaluator()
 
         optimiser1.run_sequential(evaluator)
@@ -784,7 +788,7 @@ class TestOptimiser(NumpyCompatableTestCase):
                 new_config.abc = 123
                 return [op.Sample(config, config.a), op.Sample(new_config, 10)]
 
-        optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+        optimiser = op.GridSearchOptimiser(ranges, maximise_cost=False, order=['a','b'])
         evaluator = TestEvaluator()
 
         optimiser.run_sequential(evaluator)
@@ -815,7 +819,7 @@ class TestOptimiser(NumpyCompatableTestCase):
             def test_config(self, config):
                 return op.Sample(config, config.a, extra={'test':'abc'})
 
-        optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+        optimiser = op.GridSearchOptimiser(ranges, maximise_cost=False, order=['a','b'])
         evaluator = TestEvaluator()
 
         optimiser.run_sequential(evaluator)
@@ -842,7 +846,7 @@ class TestOptimiser(NumpyCompatableTestCase):
             def test_config(self, config):
                 return []
 
-        optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+        optimiser = op.GridSearchOptimiser(ranges, maximise_cost=False, order=['a','b'])
         evaluator = TestEvaluator()
 
         optimiser.run_sequential(evaluator)
@@ -884,6 +888,11 @@ def get_dict(optimiser, different_run=False):
             # (note: ndigits is the number of decimal places, not total digits)
             #d['duration'] = round(d['duration'], ndigits=2)
 
+        if 'strategy' in d.keys():
+            d['strategy'] = d['strategy'].__dict__
+        if 'point_space' in d.keys():
+            d['point_space'] = d['point_space'].__dict__
+
         # cannot compare threading.Event objects, but what matters is their
         # set states.
         if '_stop_flag' in d.keys():
@@ -891,10 +900,10 @@ def get_dict(optimiser, different_run=False):
         if '_checkpoint_flag' in d.keys():
             d['_checkpoint_flag'] = d['_checkpoint_flag'].is_set()
 
-        if 'hypothesised_samples' in d.keys():
+        if 'hypothesised_xs' in d.keys():
             # ignore hypothesised samples for jobs that have finished since they
             # will be removed at the next possible opportunity anyway
-            d['hypothesised_samples'] = [s for s in d['hypothesised_samples'] if s[0] not in optimiser.finished_job_ids]
+            d['hypothesised_xs'] = [s for s in d['hypothesised_xs'] if s[0] not in optimiser.finished_job_ids]
         if 'step_log' in d.keys():
             # Gaussian Processes cannot be compared
             d['step_log'] = {job_ID: {k:v for k, v in step if k != 'gp'} for job_ID, step in d['step_log'].items()}
@@ -1001,11 +1010,11 @@ class TestCheckpoints(NumpyCompatableTestCase):
                 # placeholder cost function
                 return op.Sample(config, config.a, extra={'test':np.array([1,2,3])})
 
-        optimiser = op.GridSearchOptimiser(ranges, order=['a','b'])
+        optimiser = op.GridSearchOptimiser(ranges, maximise_cost=False, order=['a','b'])
         evaluator = TestEvaluator()
         def create_optimiser():
             ''' create a 'dirty' optimiser which is initialised identically but has been run '''
-            opt = op.GridSearchOptimiser(ranges, order=['a','b'])
+            opt = op.GridSearchOptimiser(ranges, maximise_cost=False, order=['a','b'])
             opt.run_sequential(evaluator, max_jobs=random.randint(0, 4))
             return opt
 
@@ -1019,11 +1028,11 @@ class TestCheckpoints(NumpyCompatableTestCase):
                 # placeholder cost function
                 return op.Sample(config, config.a, extra={'test':np.array([1,2,3])})
 
-        optimiser = op.RandomSearchOptimiser(ranges)
+        optimiser = op.RandomSearchOptimiser(ranges, maximise_cost=False)
         evaluator = TestEvaluator()
         def create_optimiser():
             ''' create a 'dirty' optimiser which is initialised identically but has been run '''
-            opt = op.RandomSearchOptimiser(ranges)
+            opt = op.RandomSearchOptimiser(ranges, maximise_cost=False)
             opt.run_sequential(evaluator, max_jobs=random.randint(0, 4))
             return opt
 
@@ -1037,12 +1046,16 @@ class TestCheckpoints(NumpyCompatableTestCase):
                 # placeholder cost function
                 return op.Sample(config, config.a+config.b, extra={'test':np.array([1,2,3])})
 
-        optimiser = op.BayesianOptimisationOptimiser(ranges, pre_samples=3, gp_params=TEST_GP_PARAMS)
+        optimiser = op.BayesianOptimisationOptimiser(
+            ranges, maximise_cost=False, acquisition_strategy=TEST_ACQ,
+            gp_params=TEST_GP_PARAMS, maximisation_args=TEST_MAXIMISATION)
         evaluator = TestEvaluator()
         def create_optimiser():
             ''' create a 'dirty' optimiser which is initialised identically but has been run '''
-            opt = op.BayesianOptimisationOptimiser(ranges, pre_samples=3, gp_params=TEST_GP_PARAMS)
-            # have to at least run a few Bayesian steps (ie max_jobs > pre_samples)
+            opt = op.BayesianOptimisationOptimiser(
+                ranges, maximise_cost=False, acquisition_strategy=TEST_ACQ,
+                gp_params=TEST_GP_PARAMS, maximisation_args=TEST_MAXIMISATION)
+            # have to at least run a few Bayesian steps (ie max_jobs > pre_phase_steps)
             opt.run_sequential(evaluator, max_jobs=random.randint(3, 5))
             return opt
 
@@ -1110,7 +1123,7 @@ class TestCheckpoints(NumpyCompatableTestCase):
 
         if isinstance(optimiser, op.BayesianOptimisationOptimiser):
             # when porting to python 2 this was not the case because of a bug
-            self.assertEqual(len(optimiser.step_log), num_jobs-optimiser.pre_samples)
+            self.assertEqual(len(optimiser.step_log), num_jobs-optimiser.strategy.pre_phase_steps)
 
         # continue from the load until the end, make sure everything went fine
         # and that the end result is the same as the optimiser which was not
@@ -1138,13 +1151,13 @@ class TestCheckpoints(NumpyCompatableTestCase):
 
         evaluators = [TestEvaluator(), TestEvaluator(), TestEvaluator()]
         def create_optimiser():
-            opt = op.GridSearchOptimiser(ranges, order=['a','b'])
+            opt = op.GridSearchOptimiser(ranges, maximise_cost=False, order=['a','b'])
             return opt
         sort_samples = lambda samples: sorted(samples, key=lambda s:(s.config.a, s.config.b))
 
         self._test_async_checkpoints(FastEvaluator(), evaluators,
                                      create_optimiser, sort_samples,
-                                     compare_results=True, num_jobs=100)
+                                     compare_results=True, num_jobs=50)
 
     @unittest.skipIf(NO_SLOW_TESTS, 'slow test')
     def test_async_checkpoints_random(self):
@@ -1157,7 +1170,7 @@ class TestCheckpoints(NumpyCompatableTestCase):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        create_optimiser = lambda: op.RandomSearchOptimiser(ranges)
+        create_optimiser = lambda: op.RandomSearchOptimiser(ranges, maximise_cost=False)
         evaluators = [TestEvaluator(), TestEvaluator(), TestEvaluator()]
         sort_samples = lambda samples: sorted(samples, key=lambda s:(s.config.a, s.config.b))
 
@@ -1165,7 +1178,7 @@ class TestCheckpoints(NumpyCompatableTestCase):
         # every configuration in the given number of jobs
         self._test_async_checkpoints(FastEvaluator(), evaluators,
                                      create_optimiser, sort_samples,
-                                     compare_results=False, num_jobs=100)
+                                     compare_results=False, num_jobs=50)
 
     @unittest.skipIf(NO_SLOW_TESTS, 'slow test')
     def test_async_checkpoints_bayes(self):
@@ -1178,7 +1191,9 @@ class TestCheckpoints(NumpyCompatableTestCase):
             def test_config(self, config):
                 return config.a # placeholder cost function
 
-        create_optimiser = lambda: op.BayesianOptimisationOptimiser(ranges, gp_params=TEST_GP_PARAMS)
+        create_optimiser = lambda: op.BayesianOptimisationOptimiser(
+            ranges, maximise_cost=False, acquisition_strategy=TEST_ACQ,
+            gp_params=TEST_GP_PARAMS, maximisation_args=TEST_MAXIMISATION)
         evaluators = [TestEvaluator(), TestEvaluator(), TestEvaluator()]
         sort_samples = lambda samples: sorted(samples, key=lambda s:(s.config.a, s.config.b))
 
@@ -1283,35 +1298,35 @@ class TestBayesianOptimisationUtils(NumpyCompatableTestCase):
             'b' : [5], # constant
             'c' : [1,2,3] # linear
         }
-        optimiser = op.BayesianOptimisationOptimiser(ranges)
+        optimiser = op.BayesianOptimisationOptimiser(ranges, maximise_cost=False, acquisition_strategy=TEST_ACQ)
 
-        self.assertEqual(optimiser.config_to_point({'a':2,'b':5,'c':1}).tolist(), [[2,1]]) # ignores the constant parameter
-        self.assertEqual(optimiser.config_to_point({'c':1,'b':5,'a':2}).tolist(), [[2,1]]) # alphabetical order
-        self.assertEqual(optimiser.config_to_point({'a':9,'b':6,'c':12}).tolist(), [[9,12]]) # fine with values outside 'valid range'
+        self.assertEqual(optimiser.point_space.config_to_point({'a':2,'b':5,'c':1}).tolist(), [[2,1]]) # ignores the constant parameter
+        self.assertEqual(optimiser.point_space.config_to_point({'c':1,'b':5,'a':2}).tolist(), [[2,1]]) # alphabetical order
+        self.assertEqual(optimiser.point_space.config_to_point({'a':9,'b':6,'c':12}).tolist(), [[9,12]]) # fine with values outside 'valid range'
 
-        self.assertEqual(optimiser.config_to_point({'a':9,'b':6,'c':12}).shape, (1,2)) # must be a 2D array
+        self.assertEqual(optimiser.point_space.config_to_point({'a':9,'b':6,'c':12}).shape, (1,2)) # must be a 2D array
 
-        self.assertRaises(AssertionError, optimiser.config_to_point, {'a':1,'b':5}) # value for 'c' not provided (which is included in the output)
-        self.assertRaises(AssertionError, optimiser.config_to_point, {'a':1,'c':2}) # value for 'c' not provided (which is not included in the output)
-        self.assertRaises(AssertionError, optimiser.config_to_point, {'a':1,'b':5,'c':3,'z':123}) # extra value
+        self.assertRaises(AssertionError, optimiser.point_space.config_to_point, {'a':1,'b':5}) # value for 'c' not provided (which is included in the output)
+        self.assertRaises(AssertionError, optimiser.point_space.config_to_point, {'a':1,'c':2}) # value for 'c' not provided (which is not included in the output)
+        self.assertRaises(AssertionError, optimiser.point_space.config_to_point, {'a':1,'b':5,'c':3,'z':123}) # extra value
 
         ranges = {
             'a' : [1,2,3] # linear
         }
-        optimiser = op.BayesianOptimisationOptimiser(ranges)
-        self.assertEquals(optimiser.config_to_point({'a':2}).tolist(), [[2]])
+        optimiser = op.BayesianOptimisationOptimiser(ranges, maximise_cost=False, acquisition_strategy=TEST_ACQ)
+        self.assertEquals(optimiser.point_space.config_to_point({'a':2}).tolist(), [[2]])
         ranges = {
             'a' : [1,2,3], # linear
             'b' : [1,2,3]  # linear
         }
-        optimiser = op.BayesianOptimisationOptimiser(ranges)
-        self.assertEquals(optimiser.config_to_point({'a':2,'b':3}).tolist(), [[2,3]])
+        optimiser = op.BayesianOptimisationOptimiser(ranges, maximise_cost=False, acquisition_strategy=TEST_ACQ)
+        self.assertEquals(optimiser.point_space.config_to_point({'a':2,'b':3}).tolist(), [[2,3]])
 
         ranges = {
             'a' : [1,10,100] # logarithmic
         }
-        optimiser = op.BayesianOptimisationOptimiser(ranges)
-        self.assertEquals(optimiser.config_to_point({'a':np.exp(1)}).tolist(), [[1]])
+        optimiser = op.BayesianOptimisationOptimiser(ranges, maximise_cost=False, acquisition_strategy=TEST_ACQ)
+        self.assertEquals(optimiser.point_space.config_to_point({'a':np.exp(1)}).tolist(), [[1]])
 
     def test_point_to_config(self):
         ranges = {
@@ -1319,37 +1334,39 @@ class TestBayesianOptimisationUtils(NumpyCompatableTestCase):
             'b' : [5], # constant
             'c' : [1,2,3] # linear
         }
-        optimiser = op.BayesianOptimisationOptimiser(ranges)
+        optimiser = op.BayesianOptimisationOptimiser(ranges, maximise_cost=False, acquisition_strategy=TEST_ACQ)
 
-        self.assertRaisesRegexp(ValueError, 'too few attributes', optimiser.point_to_config, np.array([[1]])) # point too short
-        self.assertEquals(optimiser.point_to_config(np.array([[2,3]])), {'a':2,'b':5,'c':3})
-        self.assertRaisesRegexp(ValueError, 'too many attributes', optimiser.point_to_config, np.array([[1,2,3]])) # point too long
+        self.assertRaisesRegexp(AssertionError, 'wrong number of attributes',
+                                optimiser.point_space.point_to_config, np.array([[1]])) # point too short
+        self.assertEquals(optimiser.point_space.point_to_config(np.array([[2,3]])), {'a':2,'b':5,'c':3})
+        self.assertRaisesRegexp(AssertionError, 'wrong number of attributes',
+                                optimiser.point_space.point_to_config, np.array([[1,2,3]])) # point too long
 
         ranges = {
             'a' : [1,2,3] # linear
         }
-        optimiser = op.BayesianOptimisationOptimiser(ranges)
-        self.assertEquals(optimiser.point_to_config(np.array([[2]])), {'a':2})
+        optimiser = op.BayesianOptimisationOptimiser(ranges, maximise_cost=False, acquisition_strategy=TEST_ACQ)
+        self.assertEquals(optimiser.point_space.point_to_config(np.array([[2]])), {'a':2})
         ranges = {
             'a' : [1,2,3], # linear
             'b' : [1,2,3] # linear
         }
-        optimiser = op.BayesianOptimisationOptimiser(ranges)
-        self.assertEquals(optimiser.point_to_config(np.array([[2,3]])), {'a':2,'b':3})
+        optimiser = op.BayesianOptimisationOptimiser(ranges, maximise_cost=False, acquisition_strategy=TEST_ACQ)
+        self.assertEquals(optimiser.point_space.point_to_config(np.array([[2,3]])), {'a':2,'b':3})
 
         # there was a bug (too few attributes) specifically when there are trailing constant ranges
         ranges = {
             'a' : [1,2,3], # linear
             'b' : [3] # linear
         }
-        optimiser = op.BayesianOptimisationOptimiser(ranges)
-        self.assertEquals(optimiser.point_to_config(np.array([[2]])), {'a':2,'b':3})
+        optimiser = op.BayesianOptimisationOptimiser(ranges, maximise_cost=False, acquisition_strategy=TEST_ACQ)
+        self.assertEquals(optimiser.point_space.point_to_config(np.array([[2]])), {'a':2,'b':3})
 
         ranges = {
             'a' : [1,10,100] # logarithmic
         }
-        optimiser = op.BayesianOptimisationOptimiser(ranges)
-        self.assertEquals(optimiser.point_to_config(np.array([[1]])), {'a': np.exp(1)})
+        optimiser = op.BayesianOptimisationOptimiser(ranges, maximise_cost=False, acquisition_strategy=TEST_ACQ)
+        self.assertEquals(optimiser.point_space.point_to_config(np.array([[1]])), {'a': np.exp(1)})
 
     def test_close_to_any(self):
         sx = np.array([[1.0, 2.0], [3.0, 4.0]])
@@ -1357,6 +1374,9 @@ class TestBayesianOptimisationUtils(NumpyCompatableTestCase):
 
         self.assertTrue(op.close_to_any(x(3, 4), sx)) # exact matches
         self.assertTrue(op.close_to_any(x(1, 2), sx))
+
+        # empty xs => always False
+        self.assertFalse(op.close_to_any(x(1, 2), np.empty(shape=(0, 2))))
 
         self.assertFalse(op.close_to_any(x(100, 100), sx, tol=50)) # doesn't account for if the points in xs are close to one another
 
@@ -1382,7 +1402,15 @@ class TestBayesianOptimisation(NumpyCompatableTestCase):
                 print_dot()
                 return config.a + config.b # placeholder cost function
 
-        optimiser = op.BayesianOptimisationOptimiser(ranges, acquisition_function=acquisition_function, gp_params=TEST_GP_PARAMS)
+        strategy = op.AcquisitionStrategy(
+            pre_phase_steps = 3,
+            acquisition_function = acquisition_function,
+            GP_hyperparameter_strategy = 'optimise',
+            parallel_strategy = None
+        )
+        optimiser = op.BayesianOptimisationOptimiser(
+            ranges, maximise_cost=False, acquisition_strategy=strategy,
+            gp_params=TEST_GP_PARAMS, maximisation_args=TEST_MAXIMISATION)
         evaluator = TestEvaluator()
 
         self.assertEqual(optimiser.best_sample(), None)
@@ -1404,7 +1432,9 @@ class TestBayesianOptimisation(NumpyCompatableTestCase):
                 print_dot()
                 return config.a + config.b # placeholder cost function
 
-        optimiser = op.BayesianOptimisationOptimiser(ranges, maximise_cost=True, acquisition_function='UCB', gp_params=TEST_GP_PARAMS)
+        optimiser = op.BayesianOptimisationOptimiser(
+            ranges, maximise_cost=True, acquisition_strategy=TEST_ACQ,
+            gp_params=TEST_GP_PARAMS, maximisation_args=TEST_MAXIMISATION)
         evaluator = TestEvaluator()
 
         self.assertEqual(optimiser.best_sample(), None)

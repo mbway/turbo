@@ -30,7 +30,7 @@ class DataHolder(object):
     provides similar functionality to namedtuple but DataHolder is more flexible
     with default values and the syntax for defining the fields is different.
 
-    advantages over a regular class: less boilerplate code, usage of slots means
+    Advantages over a regular class: less boilerplate code, usage of slots means
     potential performance and memory improvements, also prevents attributes from
     being added after construction. Allows default values to be specified
     declaratively. eq, repr and iter are automatically provided. to_dict allows
@@ -261,10 +261,10 @@ class WarningCatcher(warnings.catch_warnings):
 
 class RangeType:
     ''' The possible types of parameter ranges (see range_type() for details) '''
-    Arbitrary   = 'arbitrary'
-    Constant    = 'constant'
-    Linear      = 'linear'
-    Logarithmic = 'logarithmic'
+    Arbitrary   = 'a'
+    Constant    = 'c'
+    Linear      = 'i'
+    Logarithmic = 'o'
 
 def range_type(range_):
     ''' determine whether the range is arbitrary, constant, linear or logarithmic
@@ -317,14 +317,33 @@ def close_to_any(x, xs, tol=1e-5):
     x: the point to test. shape=(1, num_attribs)
     xs: the points to compare with. shape=(num_points, num_attribs)
     tol: maximum size of the squared Euclidean distance to be considered 'close'
+
+    note: xs can be empty, in which case return False, however xs must still
+        have the same number of attributes as x
     '''
     assert x.shape[1] == xs.shape[1], 'different number of attributes'
     assert x.shape[0] == 1, 'x must be a single point'
-    assert xs.shape[0] > 0, 'xs must not be empty'
     assert len(x.shape) == len(xs.shape) == 2, 'must be 2D arrays'
 
     #return np.any(np.linalg.norm(xs - x, axis=1) <= tol)  # l2 norm (Euclidean distance)
     # x is subtracted from each row of xs, each element is squared, each row is
     # summed to leave a 1D array and each sum is checked with the tolerance
     return np.any(np.sum((xs - x)**2, axis=1) <= tol) # squared Euclidean distance
+
+#TODO: test
+def unique_rows_close(arr, close_tolerance):
+    '''
+    return a subset of the rows of the given array which are further from each
+    other by at least the given closeness tolerance.
+    '''
+    assert arr.shape[0] > 0
+    avoid = np.empty(shape=(0, arr.shape[1]))
+    keep_rows = []
+
+    for i, r in enumerate(arr):
+        r = make2D_row(r)
+        if not close_to_any(r, avoid, close_tolerance):
+            avoid = np.append(avoid, r, axis=0)
+            keep_rows.append(i)
+    return arr[keep_rows]
 
