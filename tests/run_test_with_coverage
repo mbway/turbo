@@ -1,0 +1,8 @@
+#!/bin/bash
+
+coverage run --source=../optimisation ./optimisation_tests.py
+# text report to stdout
+#coverage report -m
+coverage html
+open htmlcov/index.html
+

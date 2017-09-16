@@ -334,8 +334,8 @@ class BayesianOptimisationOptimiserPlotting:
             title += ' (Random Fallback)'
 
         fig.suptitle(title, fontsize=14)
-        ax1.margins(0.01, 0.1)
-        ax2.margins(0.01, 0.1)
+        ax1.margins(0.005, 0.05)
+        ax2.margins(0.005, 0.05)
         if range_.type_ == RangeType.Logarithmic:
             ax1.set_xscale('log')
             ax2.set_xscale('log')
@@ -348,15 +348,15 @@ class BayesianOptimisationOptimiserPlotting:
         if true_cost is not None:
             # true cost is either the cost function, or pre-computed costs as an array
             ys = true_cost(all_xs) if callable(true_cost) else true_cost
-            ax1.plot(all_xs, ys, 'k--', label='true cost')
+            ax1.plot(all_xs, ys, '--', color='#2f2f2f', label='true cost', linewidth=1.0)
 
         ### Plot Samples
         # plot samples projected onto the `param` axis
-        ax1.plot(concrete_xs, concrete_ys, 'bo', label='samples')
+        ax1.plot(concrete_xs, concrete_ys, 'bo', markersize=6, label='samples', zorder=5)
 
         if len(hypothesised_xs) > 0:
             # there are some hypothesised samples
-            ax1.plot(hypothesised_xs, hypothesised_ys, 'o', color='tomato', label='hypothesised samples')
+            ax1.plot(hypothesised_xs, hypothesised_ys, 'o', color='tomato', label='hypothesised samples', zorder=5)
 
         ax1.plot(best_concrete_x, best_concrete_y, '*', markersize=15,
                  color='deepskyblue', zorder=10, label='best sample')
@@ -368,7 +368,7 @@ class BayesianOptimisationOptimiserPlotting:
             perturbed = self._points_vary_one(point, param, gp_xs)
             mus, sigmas = gp_model.predict(perturbed, return_std=True)
             mus = mus.flatten()
-            ax1.plot(all_xs, mus, 'm-', label=mu_label, alpha=mu_alpha)
+            ax1.plot(all_xs, mus, 'm-', label=mu_label, alpha=mu_alpha, linewidth=1.0)
             ax1.fill_between(all_xs, mus - n_sigma*sigmas, mus + n_sigma*sigmas, alpha=sigma_alpha,
                             color='mediumpurple', label=sigma_label)
 
@@ -376,7 +376,7 @@ class BayesianOptimisationOptimiserPlotting:
 
         plot_gp_prediction_through(chosen_point,
             mu_label='surrogate cost', sigma_label='uncertainty ${}\\sigma$'.format(n_sigma),
-            mu_alpha=1, sigma_alpha=0.3)
+            mu_alpha=1, sigma_alpha=0.25)
 
         # plot the predictions through each sample
         def predictions_through_all_samples():
@@ -406,10 +406,11 @@ class BayesianOptimisationOptimiserPlotting:
 
 
         ### Plot Vertical Bars
-        ax1.axvline(x=chosen_x)
+        bar_width = 1
+        ax1.axvline(x=chosen_x, linewidth=bar_width)
         if random_fallback:
             # in this case: chosen_x is the random choice
-            ax1.axvline(x=acq_chosen_x, color='y')
+            ax1.axvline(x=acq_chosen_x, color='y', linewidth=bar_width)
 
         ax1.legend()
 
@@ -425,14 +426,14 @@ class BayesianOptimisationOptimiserPlotting:
         ax2.fill_between(all_xs, np.zeros_like(all_xs), ac.flatten(), alpha=0.3, color='palegreen')
 
         if random_fallback:
-            ax2.axvline(x=random_chosen_x, label='next sample')
+            ax2.axvline(x=random_chosen_x, label='next sample', linewidth=bar_width)
             label='$\\mathrm{{argmax}}\\; {}$'.format(
                 self.strategy.get_name(self.maximise_cost))
-            ax2.axvline(x=acq_chosen_x, color='y', label=label)
+            ax2.axvline(x=acq_chosen_x, color='y', label=label, linewidth=bar_width)
         else:
-            ax2.axvline(x=acq_chosen_x)
-            ax2.plot(acq_chosen_x, acq_chosen_ac, 'b^', markersize=10,
-                     alpha=0.8, label='next sample')
+            ax2.axvline(x=acq_chosen_x, linewidth=bar_width)
+            ax2.plot(acq_chosen_x, acq_chosen_ac, 'b^', markersize=7,
+                     zorder=10, label='next sample')
 
         ax2.legend()
         return fig
@@ -658,8 +659,9 @@ class BayesianOptimisationOptimiserPlotting:
     def num_randomly_chosen(self):
         count = 0
         for s in self.samples:
-            is_pre_sample = s.job_ID <= self.pre_samples
-            is_random = s.job_ID in self.step_log and self.step_log[s.job_ID].chosen_at_random
+            is_pre_sample = s.job_ID <= self.strategy.pre_phase_steps
+            is_random = (s.job_ID in self.step_log and
+                isinstance(self.step_log[s.job_ID].suggestions[-1], Step.RandomSuggestion))
             if is_pre_sample or is_random:
                 count += 1
         return count

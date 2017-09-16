@@ -62,13 +62,16 @@ class Noise2D:
     create and store a grid of 2D noise which can be accessed deterministically
     with get().
     '''
-    def __init__(self, xs, ys, sigma):
+    def __init__(self, xs, ys, sigma, fixed=True):
         self.xs = xs
         self.ys = ys
-        if sigma == 0.0:
-            self.noise = np.zeros(shape=(len(xs), len(ys)))
-        else:
-            self.noise = np.random.normal(0, sigma, size=(len(xs), len(ys)))
+        self.fixed = fixed
+        self.sigma = sigma
+        if fixed:
+            if sigma == 0.0:
+                self.noise = np.zeros(shape=(len(xs), len(ys)))
+            else:
+                self.noise = np.random.normal(0, sigma, size=(len(xs), len(ys)))
     def get(self, x, y):
         '''
         get the noise value for the coordinates x and y.
@@ -78,13 +81,20 @@ class Noise2D:
             np.all(self.noise == self.get(*np.meshgrid(self.xs, self.ys)))
         '''
         if isinstance(x, np.ndarray):
-            # cannot vectorize if self is an argument
-            @np.vectorize
-            def vec_get(x, y):
-                return self.noise[self.get_index(x, y)]
-            return vec_get(x, y)
+            if self.fixed:
+                # cannot vectorize if self is an argument
+                @np.vectorize
+                def vec_get(x, y):
+                    return self.noise[self.get_index(x, y)]
+                return vec_get(x, y)
+            else:
+                assert x.shape == y.shape
+                return np.random.normal(0, self.sigma, size=x.shape)
         else:
-            return self.noise[self.get_index(x, y)]
+            if self.fixed:
+                return self.noise[self.get_index(x, y)]
+            else:
+                return np.random.normal(0, self.sigma)
     def get_index(self, x, y):
         '''
         get the index into self.noise which is closest to the given x,y

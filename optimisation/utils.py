@@ -232,6 +232,10 @@ def is_numeric(obj):
 
     return all(hasattr(obj, attr) for attr in attrs)
 
+class IgnoreWarnings(warnings.catch_warnings):
+    def __init__(self):
+        super().__init__(record=True)
+
 class WarningCatcher(warnings.catch_warnings):
     '''
     capture any warnings raised within the with statement and instead of

@@ -22,6 +22,7 @@ TODO
 - https://github.com/befelix/SafeOpt
 - https://github.com/scikit-optimize/scikit-optimize
 - https://hyperopt.github.io/hyperopt/
+- https://github.com/automl/RoBO
 
 
 # Contents (in chronological order) #

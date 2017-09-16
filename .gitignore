@@ -1,8 +1,17 @@
-.ipynb_checkpoints/
-logs/
+# programming mess
 *.swp
+tags
+
+# runtime mess
+.ipynb_checkpoints/
 *.pyc
 build/
+
+# application data
+logs/
 frames/
 *.json
-tags
+
+# coverage
+.coverage
+htmlcov

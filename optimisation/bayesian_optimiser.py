@@ -37,10 +37,10 @@ class AcquisitionStrategy(object):
             has something to fit to).
 
         acquisition_function:  (fun : str|callable[, args : dict])
-            fun: a callable function or name of a standard acquisition function
-                can be passed to specify the acquisition function to use (PI/PoI, EI,
-                TS, CB/UCB/LCB). See the relevant function definition for a
-                description of the function.
+            fun: a function from acquisition_functions or the name of an
+                acquisition function can be passed to specify the acquisition
+                function to use (PI/PoI, EI, TS, CB/UCB/LCB). See the relevant
+                function definition for a description of the function.
             args: a dict specifying any parameters relevant to the chosen
                 acquisition function. May be omitted completely or passed without
                 specifying any arguments ie `{}`.
@@ -140,8 +140,10 @@ class AcquisitionStrategy(object):
                     {'kappa' : 2.0},
                     lambda args,keys: keys <= {'kappa'}),
             ],
-            # allow custom acquisition functions with any arguments
-            no_match_check=lambda val, args, keys: callable(val)
+            # do not allow custom acquisition functions, instead custom
+            # functions should be implemented alongside the existing ones and
+            # handled properly.
+            no_match_check=lambda val, args, keys: False
         )
 
         self.gp_strategy, self.gp_strategy_args = self._load_tuple_arg(
