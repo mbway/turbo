@@ -21,23 +21,6 @@ from .utils import *
 def thompson_sample(xs, gp_model):
     raise NotImplementedError()
 
-def old_PI(xs, gp_model, maximise_cost, best_cost, xi):
-    mus, sigmas = gp_model.predict(xs, return_std=True)
-    if len(sigmas) > 100:
-        sigmas[40:60] = 0
-    sigmas = make2D(sigmas)
-
-    sf = 1 if maximise_cost else -1     # scaling factor
-    # maximisation: mu(x) - f(x+) - xi
-    # minimisation: f(x+) - mu(x) - xi
-    diff = sf * (mus - best_cost) - xi
-
-    with np.errstate(divide='ignore'):
-        Zs = diff / sigmas # produces Zs[i]=inf for all i where sigmas[i]=0.0
-    Zs[sigmas == 0.0] = 0.0 # replace the infs with 0s
-
-    return norm.cdf(Zs)
-
 def probability_of_improvement(xs, gp_model, maximise_cost, best_cost, xi):
     r'''
     This acquisition function is similar to EI
@@ -60,8 +43,6 @@ def probability_of_improvement(xs, gp_model, maximise_cost, best_cost, xi):
 
     '''
     mus, sigmas = gp_model.predict(xs, return_std=True)
-    if len(sigmas) > 100:
-        sigmas[40:60] = 0
     # using masks is slightly faster than ignoring the division by zero errors
     # then fixing later. It also seems like a 'cleaner' approach.
     mask = sigmas != 0 # sigma_x = 0  =>  PI(x) = 0
@@ -76,26 +57,7 @@ def probability_of_improvement(xs, gp_model, maximise_cost, best_cost, xi):
     Zs[mask] = diff / sigmas
     Zs = norm.cdf(Zs)
 
-    assert np.all(Zs == old_PI(xs, gp_model, maximise_cost, best_cost, xi))
     return Zs
-
-def old_EI(xs, gp_model, maximise_cost, best_cost, xi):
-    mus, sigmas = gp_model.predict(xs, return_std=True)
-    if len(sigmas) > 100:
-        sigmas[40:60] = 0
-    sigmas = make2D(sigmas)
-
-    sf = 1 if maximise_cost else -1     # scaling factor
-    # maximisation: mu(x) - f(x+) - xi
-    # minimisation: f(x+) - mu(x) - xi
-    diff = sf * (mus - best_cost) - xi
-
-    with np.errstate(divide='ignore'):
-        Zs = diff / sigmas # produces Zs[i]=inf for all i where sigmas[i]=0.0
-
-    EIs = diff * norm.cdf(Zs)  +  sigmas * norm.pdf(Zs)
-    EIs[sigmas == 0.0] = 0.0 # replace the infs with 0s
-    return EIs
 
 def expected_improvement(xs, gp_model, maximise_cost, best_cost, xi):
     r''' expected improvement acquisition function
@@ -141,9 +103,6 @@ def expected_improvement(xs, gp_model, maximise_cost, best_cost, xi):
     \end{cases}$$
     '''
     mus, sigmas = gp_model.predict(xs, return_std=True)
-    if len(sigmas) > 100:
-        sigmas[40:60] = 0
-
     # using masks is slightly faster than ignoring the division by zero errors
     # then fixing later. It also seems like a 'cleaner' approach.
     mask = sigmas != 0 # sigma_x = 0  =>  EI(x) = 0
@@ -158,7 +117,6 @@ def expected_improvement(xs, gp_model, maximise_cost, best_cost, xi):
     EIs = np.zeros_like(mus)
     EIs[mask] = diff * norm.cdf(Zs)  +  sigmas * norm.pdf(Zs)
 
-    assert np.all(EIs == old_EI(xs, gp_model, maximise_cost, best_cost, xi))
     return EIs
 
 # has been called lower confidence bound when minimising: https://scikit-optimize.github.io/notebooks/bayesian-optimization.html
