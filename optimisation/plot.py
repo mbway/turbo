@@ -267,7 +267,8 @@ class BayesianOptimisationOptimiserPlotting:
             # restore from just the hyperparameters to a GP which can be queried
             gp_model = restore_GP(sg1.gp, self.gp_params, xs, ys)
 
-            acq_fun = self._get_acq_fun(gp_model, (s.sx, s.sy, s.hx))
+            acq_fun = self._get_acq_fun(gp_model, ys)
+            sims = False # no simulations for this strategy
 
             # the GP is trained in point space
             gp_xs = self.point_space.param_to_point_space(all_xs, param)
@@ -278,6 +279,55 @@ class BayesianOptimisationOptimiserPlotting:
             concrete_ys = s.sy
             hypothesised_xs = self.point_space.param_to_config_space(s.hx, param).flatten()
             hypothesised_ys = sg1.hy
+
+            # the current best concrete sample (x is only the value along the
+            # chosen parameter in config space)
+            best_i = np.argmax(concrete_ys) if self.maximise_cost else np.argmin(concrete_ys)
+            best_concrete_x = concrete_xs[best_i]
+            best_concrete_y = concrete_ys[best_i]
+
+            # next point chosen by the acquisition function to be evaluated
+            acq_chosen_point = sg1.x
+            acq_chosen_x = self.point_space.param_to_config_space(acq_chosen_point, param)
+            acq_chosen_ac = sg1.ac
+
+            # the final choice of the step, replaced by the random fallback
+            # choice if there was one
+            chosen_point = acq_chosen_point
+            chosen_x = acq_chosen_x
+
+        elif isinstance(sg1, Step.MC_MaxAcqSuggestion):
+            # combination of the concrete samples (sx, sy) and the hypothesised samples
+            # (hx, hy) if there are any
+            xs = np.vstack((s.sx, s.hx))
+
+            # restore from just the hyperparameters to a GP which can be queried
+            gp_model = restore_GP(sg1.gp, self.gp_params, s.sx, s.sy)
+
+            sims = True # simulations used in this strategy
+            sim_gps = []
+            sim_ac_funs = [] # the acquisition functions for each simulation
+            for hy, sim_gp in sg1.simulations:
+                ys = np.vstack((s.sy, hy))
+                # fit the GP to the points of this simulation
+                sim_gp = restore_GP(sg1.gp, self.gp_params, xs, ys)
+                acq = self._get_acq_fun(sim_gp, ys) # partially apply
+                sim_ac_funs.append(acq)
+                sim_gps.append(sim_gp)
+
+            # average acquisition across every simulation
+            acq_fun = lambda xs: 1.0/len(sg1.simulations) * np.sum(acq(xs) for acq in sim_ac_funs)
+
+            # the GP is trained in point space
+            gp_xs = self.point_space.param_to_point_space(all_xs, param)
+
+            # the values for the chosen parameter for the concrete and
+            # hypothesised samples in config space.
+            concrete_xs = self.point_space.param_to_config_space(s.sx, param).flatten()
+            concrete_ys = s.sy
+            hypothesised_xs = self.point_space.param_to_config_space(s.hx, param).flatten()
+            hypothesised_xs = np.vstack([make2D(hypothesised_xs)] * len(sg1.simulations))
+            hypothesised_ys = np.vstack([hy for hy,sim_gp in sg1.simulations])
 
             # the current best concrete sample (x is only the value along the
             # chosen parameter in config space)
@@ -323,6 +373,9 @@ class BayesianOptimisationOptimiserPlotting:
             gp_perturbed_points = self._points_vary_one(chosen_point, param, gp_xs)
             ac = acq_fun(gp_perturbed_points)
 
+            if sims:
+                sim_ac = [acq(gp_perturbed_points) for acq in sim_ac_funs]
+                sim_mus = [gp.predict(gp_perturbed_points).flatten() for gp in sim_gps]
 
         fig = plt.figure(figsize=(16, 10)) # inches
         grid = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=[2, 1])
@@ -347,8 +400,8 @@ class BayesianOptimisationOptimiserPlotting:
         ### Plot True Cost
         if true_cost is not None:
             # true cost is either the cost function, or pre-computed costs as an array
-            ys = true_cost(all_xs) if callable(true_cost) else true_cost
-            ax1.plot(all_xs, ys, '--', color='#2f2f2f', label='true cost', linewidth=1.0)
+            true_ys = true_cost(all_xs) if callable(true_cost) else true_cost
+            ax1.plot(all_xs, true_ys, '--', color='#2f2f2f', label='true cost', linewidth=1.0)
 
         ### Plot Samples
         # plot samples projected onto the `param` axis
@@ -373,6 +426,10 @@ class BayesianOptimisationOptimiserPlotting:
                             color='mediumpurple', label=sigma_label)
 
         #TODO: fit the view to the cost function, don't expand to fit in the uncertainty
+
+        if sims:
+            for mus in sim_mus:
+                ax1.plot(all_xs, mus, 'm:', linewidth=1.0)
 
         plot_gp_prediction_through(chosen_point,
             mu_label='surrogate cost', sigma_label='uncertainty ${}\\sigma$'.format(n_sigma),
@@ -421,6 +478,10 @@ class BayesianOptimisationOptimiserPlotting:
         # can be useful for observing the gradients of acquisition functions
         # with very thin spikes.
         #ax2.set_yscale('log')
+
+        if sims:
+            for s_ac in sim_ac:
+                ax2.plot(all_xs, s_ac, ':', color='g', linewidth=1.0)
 
         ax2.plot(all_xs, ac, '-', color='g', linewidth=1.0, label='acquisition function')
         ax2.fill_between(all_xs, np.zeros_like(all_xs), ac.flatten(), alpha=0.3, color='palegreen')
@@ -488,7 +549,7 @@ class BayesianOptimisationOptimiserPlotting:
             # restore from just the hyperparameters to a GP which can be queried
             gp_model = restore_GP(sg1.gp, self.gp_params, xs, ys)
 
-            acq_fun = self._get_acq_fun(gp_model, (s.sx, s.sy, s.hx))
+            acq_fun = self._get_acq_fun(gp_model, ys)
 
             # the GP is trained in point space
             gp_xs = self.point_space.param_to_point_space(all_xs, x_param)

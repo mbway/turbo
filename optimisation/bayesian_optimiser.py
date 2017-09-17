@@ -170,7 +170,7 @@ class AcquisitionStrategy(object):
                 ('kb', ('kriging believer'), {},
                     lambda args,keys: not keys),
                 ('mc', ('monte carlo', 'monte-carlo'), {},#TODO: defaults
-                    lambda args,keys: keys <= {'N', 'num_threads'}),
+                    lambda args,keys: 'N' in keys and keys <= {'N', 'num_threads'}),
                 ('asyts', (), {},
                     lambda args,keys: not keys)
             ],
@@ -237,16 +237,23 @@ class AcquisitionStrategy(object):
 
     #TODO: move to optimiser
     def get_name(self, maximise_cost):
-        if self.acq_fun == ac_funs.probability_of_improvement:
-            return 'PI'
-        elif self.acq_fun == ac_funs.expected_improvement:
-            return 'EI'
-        elif self.acq_fun == ac_funs.thompson_sample:
-            return 'TS'
-        elif self.acq_fun == ac_funs.confidence_bound:
-            return 'UCB' if maximise_cost else 'LCB'
+        if self.parallel_strategy == 'mc':
+            prefix = 'Integrated-'
         else:
-            return 'Custom'
+            prefix = ''
+
+        if self.acq_fun == ac_funs.probability_of_improvement:
+            ac_name = 'PI'
+        elif self.acq_fun == ac_funs.expected_improvement:
+            ac_name = 'EI'
+        elif self.acq_fun == ac_funs.thompson_sample:
+            ac_name = 'TS'
+        elif self.acq_fun == ac_funs.confidence_bound:
+            ac_name = 'UCB' if maximise_cost else 'LCB'
+        else:
+            ac_name = 'Custom'
+
+        return prefix + ac_name
 
 
 class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optimiser):
@@ -401,6 +408,9 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
 
         # [(job_ID, Step)]: steps which have been started but have not finished
         self.outstanding_steps = []
+        # a GP trained on only the concrete samples, only used for some
+        # acquisition strategies.
+        self.concrete_gp = None
 
         self.step_log = {}
         self.step_log_keep = 100 # max number of steps to keep
@@ -500,21 +510,21 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
                 gp_model.fit(xs, ys)
         return gp_model
 
-    def _get_acq_fun(self, gp_model, data_set):
+    def _get_acq_fun(self, gp_model, ys):
         '''
         return a partially applied acquisition function which takes a single
         argument: an ndarray of points to evaluate the acquisition function at.
 
         gp_model: the trained GP to use for evaluating
+        ys: cost values for the concrete and hypothesised samples
         '''
         acq = self.strategy.acq_fun
         acq_params = self.strategy.acq_fun_args
 
         if acq in [ac_funs.probability_of_improvement,
                    ac_funs.expected_improvement]:
-            sx, sy, hx = data_set
             chooser = np.max if self.maximise_cost else np.min
-            best_cost = chooser(sy)
+            best_cost = chooser(ys)
             return lambda xs: acq(xs, gp_model, self.maximise_cost, best_cost, **acq_params)
 
         elif acq == ac_funs.thompson_sample:
@@ -560,7 +570,7 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
             raise NotImplementedError()
 
         gp_model = self._train_gp(xs, ys)
-        acq = self._get_acq_fun(gp_model, data_set) # partially apply
+        acq = self._get_acq_fun(gp_model, ys) # partially apply
 
         # suggest_x may be None if the maximisation failed
         suggest_x, suggest_ac = self._maximise_acquisition(acq)
@@ -572,8 +582,58 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
     def _max_mc_acq_suggestion(self, data_set):
         sx, sy, hx = data_set
         assert self.strategy.parallel_strategy == 'mc'
+        assert len(hx) != 0 # should only be called when there are outstanding steps
 
-        raise NotImplementedError()
+        #if self.concrete_gp is None or np.any(self.concrete_gp.y_train_ != sy):
+            #self.concrete_gp = self._train_gp(sx, sy)
+
+        latest_gp_params = s0.gp
+        assert isinstance(s0, (Step.MaxAcqSuggestion, Step.MC_MaxAcqSuggestion))
+        log_warning = lambda w: self._log('GP warning: {}'.format(warn))
+        #import pdb;pdb.set_trace()
+        with WarningCatcher(log_warning):
+            # use the latest hyperparameters from the known concrete samples and
+            # fit the GP to the currently known concrete samples (which may be
+            # more than latest_step.sx/sy)
+            latest_gp = restore_GP(latest_gp_params, self.gp_params, sx, sy)
+
+            # the number of samples to draw for each outstanding step
+            N = self.strategy.parallel_strategy_args['N']
+            hy = []
+            for job_ID, step in self.outstanding_steps:
+                # by default random_state uses a _fixed_ seed! setting to None
+                # uses the current numpy random state
+                chosen_hys = latest_gp.sample_y(step.chosen_x(), N, random_state=None)
+                assert chosen_hys.shape == (1, 1, N)
+                hy.append(chosen_hys.reshape(1, N))
+
+        # hys is a list where each element is a set of sampled values
+        # corresponding to hx (ie multiple versions of hy)
+        hys = [make2D(np.array(row)) for row in np.vstack(hy).T.tolist()]
+        xs = np.vstack((sx, hx))
+
+        # run each simulation
+        sim_ac_funs = [] # the acquisition functions for each simulation
+        with WarningCatcher(log_warning):
+            for hy in hys:
+                ys = np.vstack((sy, hy))
+                # fit the GP to the points of this simulation
+                sim_gp = restore_GP(latest_gp_params, self.gp_params, xs, ys)
+                acq = self._get_acq_fun(sim_gp, ys) # partially apply
+                sim_ac_funs.append(acq)
+
+            # average acquisition across every simulation
+            acq_fun = lambda xs: 1.0/len(sim_acs) * np.sum(acq(xs) for acq in sim_ac_funs)
+
+            # suggest_x may be None if the maximisation failed
+            suggest_x, suggest_ac = self._maximise_acquisition(acq_fun)
+
+        return Step.MC_MaxAcqSuggestion(
+            gp=latest_gp_params,
+            simulations=[(hy, None) for hy in hys],
+            x=suggest_x,
+            ac=suggest_ac
+        )
 
     def _random_suggestion(self, data_set):
         sx, sy, hx = data_set
@@ -734,4 +794,5 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
 
         # reset any progress attributes
         self.outstanding_steps = []
+        self.concrete_gp = None
 

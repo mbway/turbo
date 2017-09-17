@@ -233,13 +233,25 @@ def message_server(server_addr, connect_timeout,
                 continue # restart communication
             finally:
                 if conn is not None:
-                    conn.shutdown(socket.SHUT_RDWR)
+                    try:
+                        conn.shutdown(socket.SHUT_RDWR)
+                    except socket.error as e:
+                        if e.errno == 107: # Transport endpoint is not connected
+                            pass
+                        else:
+                            raise e
                     conn.close()
                     # reset to None so that it is not closed again if accept times out
                     conn = None
     finally:
         if sock is not None:
-            sock.shutdown(socket.SHUT_RDWR)
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except socket.error as e:
+                if e.errno == 107: # Transport endpoint is not connected
+                    pass
+                else:
+                    raise e
             sock.close()
 
 

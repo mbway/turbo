@@ -9,7 +9,6 @@ from .py2 import *
 import numpy as np
 
 import sklearn.gaussian_process as gp
-from sklearn.base import clone as sk_clone
 import scipy.optimize
 
 # local modules
@@ -44,8 +43,7 @@ def restore_GP(stored_params, gp_params, xs, ys):
     opt = p['optimizer']
     gp_model.set_params(optimizer=None)
     # don't want to modify the kernel which is part of gp_params, so modify a clone
-    gp_model.set_params(kernel=sk_clone(kernel))
-    gp_model.kernel.theta = stored_params
+    gp_model.set_params(kernel=kernel.clone_with_theta(stored_params))
     gp_model.fit(xs, ys)
     gp_model.set_params(kernel=kernel, optimizer=opt)
     return gp_model
@@ -203,6 +201,7 @@ class Step(DataHolder):
                 trained on only concrete samples
             sim_gp: a stored GP trained on a data set consisting of
                 concrete_samples + hypothesised samples for this simulation.
+                None if the step gp hyperparameters are used.
                 #TODO:
                 #For time concerns, these GPs may have the same parameters as
                 the GP trained on only the concrete samples.
