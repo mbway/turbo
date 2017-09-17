@@ -888,23 +888,23 @@ def get_dict(optimiser, different_run=False):
             # (note: ndigits is the number of decimal places, not total digits)
             #d['duration'] = round(d['duration'], ndigits=2)
 
-        if 'strategy' in d.keys():
+        if 'strategy' in d:
             d['strategy'] = d['strategy'].__dict__
-        if 'point_space' in d.keys():
+        if 'point_space' in d:
             d['point_space'] = d['point_space'].__dict__
 
         # cannot compare threading.Event objects, but what matters is their
         # set states.
-        if '_stop_flag' in d.keys():
+        if '_stop_flag' in d:
             d['_stop_flag'] = d['_stop_flag'].is_set()
-        if '_checkpoint_flag' in d.keys():
+        if '_checkpoint_flag' in d:
             d['_checkpoint_flag'] = d['_checkpoint_flag'].is_set()
 
-        if 'hypothesised_xs' in d.keys():
+        if 'outstanding_steps' in d:
             # ignore hypothesised samples for jobs that have finished since they
             # will be removed at the next possible opportunity anyway
-            d['hypothesised_xs'] = [s for s in d['hypothesised_xs'] if s[0] not in optimiser.finished_job_ids]
-        if 'step_log' in d.keys():
+            d['outstanding_steps'] = [s for s in d['outstanding_steps'] if s[0] not in optimiser.finished_job_ids]
+        if 'step_log' in d:
             # Gaussian Processes cannot be compared
             d['step_log'] = {job_ID: {k:v for k, v in step if k != 'gp'} for job_ID, step in d['step_log'].items()}
         return d

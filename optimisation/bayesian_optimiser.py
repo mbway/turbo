@@ -399,39 +399,24 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
         # in space which the GP is trained in.
         self.point_space = PointSpace(self.params, self.ranges, self.close_tolerance)
 
-        #TODO: move to runstate?
-        # not ready for a next configuration until the job with id ==
-        # self.wait_until has been processed. Not used when allow_parallel.
-        self._wait_for_job = None
-        # [(job_ID, x)] where x is a configuration in point space. Not used when
-        # there is no parallel strategy.
-        self.hypothesised_xs = []
-
-        # a GP trained on _only_ on the concrete samples. Invalidated and set to
-        # None every time a new concrete sample is added
-        self.concrete_gp = None
+        # [(job_ID, Step)]: steps which have been started but have not finished
+        self.outstanding_steps = []
 
         self.step_log = {}
         self.step_log_keep = 100 # max number of steps to keep
 
+
     def configuration_space_size(self):
         return inf # continuous
 
-    def _process_job_results(self, job, samples):
-        super()._process_job_results(job, samples)
-        self.concrete_gp = None # invalidate since there are new samples
-
     def _ready_for_next_configuration(self):
         if self.strategy.parallel_strategy == 'none': # force serial
-            in_pre_phase = self.num_started_jobs < self.strategy.pre_phase_steps
-            # all jobs from the pre-phase are finished, need the first Bayesian
-            # optimisation sample
-            pre_phase_finished = (self._wait_for_job is None and
-                                  self.num_finished_jobs >= self.strategy.pre_phase_steps)
-            # finished waiting for the last Bayesian optimisation job to finish
-            bayes_job_finished = self._wait_for_job in self.finished_job_ids
+            more_pre_phase = self.num_started_jobs < self.strategy.pre_phase_steps
+            pre_phase_done = self.num_finished_jobs >= self.strategy.pre_phase_steps
+            waiting_for_job = any(job_ID not in self.finished_job_ids for
+                                  job_ID, step in self.outstanding_steps)
 
-            return in_pre_phase or pre_phase_finished or bayes_job_finished
+            return more_pre_phase or (pre_phase_done and not waiting_for_job)
         else: # allow parallel
             # wait for all of the pre-phase samples to be taken before starting
             # the Bayesian optimisation steps. Otherwise always ready.
@@ -487,15 +472,15 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
         assert sx.shape == (len(self.samples), self.point_space.num_attribs)
         assert sy.shape == (len(self.samples), 1)
 
-        # remove samples whose jobs have since finished
-        self.hypothesised_xs = [(job_ID, x) for job_ID, x in self.hypothesised_xs
+        # remove steps whose jobs have since finished
+        self.outstanding_steps = [(job_ID, step) for job_ID, step in self.outstanding_steps
                                         if job_ID not in self.finished_job_ids]
 
-        if len(self.hypothesised_xs) > 0:
-            hx = np.vstack(x for job_ID, x in self.hypothesised_xs)
+        if len(self.outstanding_steps) > 0:
+            hx = np.vstack(step.chosen_x() for job_ID, step in self.outstanding_steps)
         else:
             hx = np.empty(shape=(0, self.point_space.num_attribs))
-        assert hx.shape == (len(self.hypothesised_xs), self.point_space.num_attribs)
+        assert hx.shape == (len(self.outstanding_steps), self.point_space.num_attribs)
 
         return sx, sy, hx
 
@@ -555,17 +540,21 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
             xs, ys = sx, sy
 
         elif self.strategy.parallel_strategy == 'kb': # Kriging Believer
-            # concrete_gp is a GP trained on only the concrete samples, it is
-            # set to None every time new samples are added.
-            if self.concrete_gp is None:
-                self.concrete_gp = self._train_gp(sx, sy)
-            # TODO: check that this is OK and that the prediction shouldn't
-            # be based on a GP trained on every sample including
-            # hypothesised up to this point
             log_warning = lambda w: self._log('warning predicting hy: {}'.format(warn))
-            with WarningCatcher(log_warning):
-                hy = self.concrete_gp.predict(hx)
-            xs, ys = np.vstack([sx, hx]), np.vstack([sy, hy])
+            # use the data saved in the outstanding steps to get the
+            # hypothesised cost for the points in hx.
+            # there will be at least one step since len(hx) != 0
+            hy = []
+            for job_ID, step in self.outstanding_steps:
+                s0 = step.suggestions[0]
+                assert isinstance(s0, Step.MaxAcqSuggestion)
+                with WarningCatcher(log_warning):
+                    gp = restore_GP(s0.gp, self.gp_params,
+                                    np.vstack((step.sx, step.hx)), np.vstack((step.sy, s0.hy)))
+                    hy.append(gp.predict(step.chosen_x()))
+            hy = np.vstack(hy)
+
+            xs, ys = np.vstack((sx, hx)), np.vstack((sy, hy))
 
         else:
             raise NotImplementedError()
@@ -613,8 +602,11 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
         suggestions = []
 
         if self.strategy.parallel_strategy == 'none':
+            # not allowing parallel evaluations is handled in
+            # _ready_for_next_configuration, this method should not be called
+            # with evaluations still in progress when there is no parallel
+            # strategy.
             assert len(hx) == 0 # no hypothesised samples
-            self._wait_for_job = job_ID # do not add a new job until this job has been processed
 
         # suggestion by maximising an acquisition function
         if self.strategy.parallel_strategy == 'mc' and len(hx) != 0:
@@ -636,37 +628,31 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
             random_suggestion = self._random_suggestion(data_set)
             suggestions.append(random_suggestion)
 
-        chosen_x = suggestions[-1].x
-        if self.strategy.parallel_strategy != 'none':
-            self.hypothesised_xs.append((job_ID, chosen_x))
-
-        assert job_ID not in self.step_log
-        self.step_log[job_ID] = Step(
+        step = Step(
             job_ID=job_ID,
             sx=sx, sy=sy,
             hx=hx,
             suggestions=suggestions
         )
+
+        self.outstanding_steps.append((job_ID, step))
+        assert job_ID not in self.step_log
+        self.step_log[job_ID] = step
         self.trim_step_log()
 
-        return self.point_space.point_to_config(chosen_x)
+        return self.point_space.point_to_config(step.chosen_x())
 
 
 
     def _consistent_and_quiescent(self):
         # super class checks general properties
         sup = super()._consistent_and_quiescent()
-        # either not waiting for a job, or waiting for a job which has finished
-        not_waiting = (
-            self._wait_for_job is None or
-            self._wait_for_job in self.finished_job_ids
-        )
-        # either there are no hypothesised samples, or they are for jobs which
+        # either there are no outstanding steps, or they are for jobs which
         # have already finished and just haven't been removed yet.
-        no_hypotheses = (
-            len(self.hypothesised_xs) == 0 or
+        no_outstanding_steps = (
+            len(self.outstanding_steps) == 0 or
             all(job_id in self.finished_job_ids for job_id, x in
-                 self.hypothesised_xs)
+                 self.outstanding_steps)
         )
         # 1. make sure that the arrays are exactly 2 dimensional
         # 2. make sure that there are equal numbers of rows in the samples (and
@@ -699,13 +685,13 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
             # one of the shapes has <2 elements
             step_log_valid = False
 
-        return sup and not_waiting and no_hypotheses and step_log_valid
+        return sup and no_outstanding_steps and step_log_valid
 
     def _save_dict(self):
         save = super()._save_dict()
 
-        # hypothesised samples and _wait_for_job are not needed to be saved since
-        # the optimiser should be quiescent
+        # outstanding_steps is not needed to be saved since the optimiser should
+        # be quiescent.
 
         save['step_log'] = []
         # convert the step log (dict) to an array of tuples sorted by job_ID
@@ -747,6 +733,5 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
         self.step_log = {n : Step(**s) for n, s in save['step_log']}
 
         # reset any progress attributes
-        self._wait_for_job = None
-        self.hypothesised_xs = []
+        self.outstanding_steps = []
 

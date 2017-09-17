@@ -160,6 +160,9 @@ class Step(DataHolder):
     def chosen_at_random(self):
         return isinstance(self.suggestions[-1], Step.RandomSuggestion)
 
+    def chosen_x(self):
+        return self.suggestions[-1].x
+
     class RandomSuggestion(DataHolder):
         '''
         A configuration suggestion chosen at random
