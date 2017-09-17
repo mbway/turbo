@@ -309,8 +309,9 @@ class BayesianOptimisationOptimiserPlotting:
             sim_ac_funs = [] # the acquisition functions for each simulation
             for hy, sim_gp in sg1.simulations:
                 ys = np.vstack((s.sy, hy))
+                sim_gp = sim_gp if sim_gp is not None else sg1.gp
                 # fit the GP to the points of this simulation
-                sim_gp = restore_GP(sg1.gp, self.gp_params, xs, ys)
+                sim_gp = restore_GP(sim_gp, self.gp_params, xs, ys)
                 acq = self._get_acq_fun(sim_gp, ys) # partially apply
                 sim_ac_funs.append(acq)
                 sim_gps.append(sim_gp)
@@ -409,7 +410,8 @@ class BayesianOptimisationOptimiserPlotting:
 
         if len(hypothesised_xs) > 0:
             # there are some hypothesised samples
-            ax1.plot(hypothesised_xs, hypothesised_ys, 'o', color='tomato', label='hypothesised samples', zorder=5)
+            ax1.plot(hypothesised_xs, hypothesised_ys, 'o', color='tomato',
+                     markersize=6, label='hypothesised samples', zorder=5)
 
         ax1.plot(best_concrete_x, best_concrete_y, '*', markersize=15,
                  color='deepskyblue', zorder=10, label='best sample')

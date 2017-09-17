@@ -94,7 +94,12 @@ class AcquisitionStrategy(object):
                     these simulations, then average the result. Because each
                     simulation is independent, they may themselves be performed
                     in parallel across multiple threads.
-                    args: 'N', 'num_threads'
+                    args:
+                        'N': the number of simulations to use.
+                        'num_threads': #TODO
+                        'sim_train_its': the number of optimiser restarts to
+                            allow the GPs for each simulation. 0 => re-use the
+                            hyperparameters of the main suggestion GP.
                 'asyTS': asynchronous Thompson sampling. Ignore unfinished
                     evaluations and perform Thompson sampling on the GP
                     posterior as normal. Only possible when using the TS
@@ -169,8 +174,9 @@ class AcquisitionStrategy(object):
                     lambda args,keys: keys <= {'L'}),
                 ('kb', ('kriging believer'), {},
                     lambda args,keys: not keys),
-                ('mc', ('monte carlo', 'monte-carlo'), {},#TODO: defaults
-                    lambda args,keys: 'N' in keys and keys <= {'N', 'num_threads'}),
+                ('mc', ('monte carlo', 'monte-carlo'),
+                    {'N' : 20, 'sim_train_its' : 0},
+                    lambda args,keys: keys <= {'N', 'num_threads', 'sim_train_its'}),
                 ('asyts', (), {},
                     lambda args,keys: not keys)
             ],
@@ -584,26 +590,20 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
         assert self.strategy.parallel_strategy == 'mc'
         assert len(hx) != 0 # should only be called when there are outstanding steps
 
-        #if self.concrete_gp is None or np.any(self.concrete_gp.y_train_ != sy):
-            #self.concrete_gp = self._train_gp(sx, sy)
+        # if there have been no new concrete samples, just re-use the last GP
+        if self.concrete_gp is None or np.any(self.concrete_gp.y_train_ != sy):
+            self.concrete_gp = self._train_gp(sx, sy)
+        concrete_params = store_GP(self.concrete_gp)
 
-        latest_gp_params = s0.gp
-        assert isinstance(s0, (Step.MaxAcqSuggestion, Step.MC_MaxAcqSuggestion))
         log_warning = lambda w: self._log('GP warning: {}'.format(warn))
-        #import pdb;pdb.set_trace()
         with WarningCatcher(log_warning):
-            # use the latest hyperparameters from the known concrete samples and
-            # fit the GP to the currently known concrete samples (which may be
-            # more than latest_step.sx/sy)
-            latest_gp = restore_GP(latest_gp_params, self.gp_params, sx, sy)
-
             # the number of samples to draw for each outstanding step
             N = self.strategy.parallel_strategy_args['N']
             hy = []
             for job_ID, step in self.outstanding_steps:
-                # by default random_state uses a _fixed_ seed! setting to None
-                # uses the current numpy random state
-                chosen_hys = latest_gp.sample_y(step.chosen_x(), N, random_state=None)
+                # by default random_state uses a fixed seed! Setting to None
+                # uses the current numpy random state.
+                chosen_hys = self.concrete_gp.sample_y(step.chosen_x(), N, random_state=None)
                 assert chosen_hys.shape == (1, 1, N)
                 hy.append(chosen_hys.reshape(1, N))
 
@@ -613,24 +613,39 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
         xs = np.vstack((sx, hx))
 
         # run each simulation
-        sim_ac_funs = [] # the acquisition functions for each simulation
+        train_its = self.strategy.parallel_strategy_args['sim_train_its']
+        if train_its != 0:
+            sim_gp_params = self.gp_params.copy()
+            sim_gp_params['n_restarts_optimizer'] = train_its
+        # [(hy, sim_gp)]
+        sims = []
+        # list of acquisition functions for each simulation
+        sim_acq_funs = []
         with WarningCatcher(log_warning):
             for hy in hys:
                 ys = np.vstack((sy, hy))
+
                 # fit the GP to the points of this simulation
-                sim_gp = restore_GP(latest_gp_params, self.gp_params, xs, ys)
+                if train_its == 0: # re-use the main GP
+                    sim_gp = restore_GP(concrete_params, self.gp_params, xs, ys)
+                    sims.append((hy, None)) # None => re-using the concrete GP params
+                else:
+                    sim_gp = gp.GaussianProcessRegressor(**sim_gp_params)
+                    sim_gp.fit(xs, ys)
+                    sims.append((hy, store_GP(sim_gp)))
+
                 acq = self._get_acq_fun(sim_gp, ys) # partially apply
-                sim_ac_funs.append(acq)
+                sim_acq_funs.append(acq)
 
             # average acquisition across every simulation
-            acq_fun = lambda xs: 1.0/len(sim_acs) * np.sum(acq(xs) for acq in sim_ac_funs)
+            acq_fun = lambda xs: 1.0/len(sim_acq_funs) * np.sum(acq(xs) for acq in sim_acq_funs)
 
             # suggest_x may be None if the maximisation failed
             suggest_x, suggest_ac = self._maximise_acquisition(acq_fun)
 
         return Step.MC_MaxAcqSuggestion(
-            gp=latest_gp_params,
-            simulations=[(hy, None) for hy in hys],
+            gp=concrete_params,
+            simulations=sims,
             x=suggest_x,
             ac=suggest_ac
         )

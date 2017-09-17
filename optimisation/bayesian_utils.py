@@ -201,10 +201,8 @@ class Step(DataHolder):
                 trained on only concrete samples
             sim_gp: a stored GP trained on a data set consisting of
                 concrete_samples + hypothesised samples for this simulation.
-                None if the step gp hyperparameters are used.
-                #TODO:
-                #For time concerns, these GPs may have the same parameters as
-                the GP trained on only the concrete samples.
+                None if the suggestion gp hyperparameters are used (for faster
+                computation).
             ac_random_state: the state of the RNG when the acquisition function
                 was evaluated (only used when the acquisition function has a
                 random element. Currently this is only the case with Thompson
