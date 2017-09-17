@@ -328,7 +328,7 @@ class BayesianOptimisationOptimiserPlotting:
             concrete_ys = s.sy
             hypothesised_xs = self.point_space.param_to_config_space(s.hx, param).flatten()
             hypothesised_xs = np.vstack([make2D(hypothesised_xs)] * len(sg1.simulations))
-            hypothesised_ys = np.vstack([hy for hy,sim_gp in sg1.simulations])
+            hypothesised_ys = np.vstack([hy for hy, sim_gp in sg1.simulations])
 
             # the current best concrete sample (x is only the value along the
             # chosen parameter in config space)
@@ -552,13 +552,14 @@ class BayesianOptimisationOptimiserPlotting:
             gp_model = restore_GP(sg1.gp, self.gp_params, xs, ys)
 
             acq_fun = self._get_acq_fun(gp_model, ys)
+            sims = False # no simulations for this strategy
 
             # the GP is trained in point space
             gp_xs = self.point_space.param_to_point_space(all_xs, x_param)
             gp_ys = self.point_space.param_to_point_space(all_ys, y_param)
             gp_X, gp_Y = np.meshgrid(gp_xs, gp_ys)
             grid_size = (len(all_xs), len(all_ys)) # shape of gp_X and gp_Y
-            assert grid_size == gp_X.shape #TODO: remove if accurate
+            assert grid_size == gp_X.shape
             # all combinations of x and y values, each point as a row
             #TODO: would hstack work instead of transposing?
             gp_points = np.vstack((gp_X.ravel(), gp_Y.ravel())).T # ravel squashes to 1D
@@ -574,7 +575,7 @@ class BayesianOptimisationOptimiserPlotting:
             hypothesised_zs = sg1.hy
 
             # the current best concrete sample
-            best_i = np.argmax(concrete_ys) if self.maximise_cost else np.argmin(concrete_ys)
+            best_i = np.argmax(concrete_zs) if self.maximise_cost else np.argmin(concrete_zs)
             best_concrete_x = concrete_xs[best_i]
             best_concrete_y = concrete_ys[best_i]
             best_concrete_z = concrete_zs[best_i]
@@ -588,6 +589,69 @@ class BayesianOptimisationOptimiserPlotting:
             chosen_point = acq_chosen_point
             chosen_x = acq_chosen_x
             chosen_y = acq_chosen_y
+
+        elif isinstance(sg1, Step.MC_MaxAcqSuggestion):
+            # combination of the concrete samples (sx, sy) and the hypothesised samples
+            # (hx, hy) if there are any
+            xs = np.vstack((s.sx, s.hx))
+
+            # restore from just the hyperparameters to a GP which can be queried
+            gp_model = restore_GP(sg1.gp, self.gp_params, s.sx, s.sy)
+
+            sims = True # simulations used in this strategy
+            sim_gps = []
+            sim_ac_funs = [] # the acquisition functions for each simulation
+            for hy, sim_gp in sg1.simulations:
+                ys = np.vstack((s.sy, hy))
+                sim_gp = sim_gp if sim_gp is not None else sg1.gp
+                # fit the GP to the points of this simulation
+                sim_gp = restore_GP(sim_gp, self.gp_params, xs, ys)
+                acq = self._get_acq_fun(sim_gp, ys) # partially apply
+                sim_ac_funs.append(acq)
+                sim_gps.append(sim_gp)
+
+            # average acquisition across every simulation
+            acq_fun = lambda xs: 1.0/len(sg1.simulations) * np.sum(acq(xs) for acq in sim_ac_funs)
+
+            # the GP is trained in point space
+            gp_xs = self.point_space.param_to_point_space(all_xs, x_param)
+            gp_ys = self.point_space.param_to_point_space(all_ys, y_param)
+            gp_X, gp_Y = np.meshgrid(gp_xs, gp_ys)
+            grid_size = (len(all_xs), len(all_ys)) # shape of gp_X and gp_Y
+            assert grid_size == gp_X.shape
+            # all combinations of x and y values, each point as a row
+            #TODO: would hstack work instead of transposing?
+            gp_points = np.vstack((gp_X.ravel(), gp_Y.ravel())).T # ravel squashes to 1D
+
+            # the values for the chosen parameter for the concrete and
+            # hypothesised samples in config space.
+            concrete_xs = self.point_space.param_to_config_space(s.sx, x_param).flatten()
+            concrete_ys = self.point_space.param_to_config_space(s.sx, y_param).flatten()
+            concrete_zs = s.sy
+
+            hypothesised_xs = self.point_space.param_to_config_space(s.hx, x_param).flatten()
+            hypothesised_ys = self.point_space.param_to_config_space(s.hx, y_param).flatten()
+            hypothesised_xs = np.vstack([make2D(hypothesised_xs)] * len(sg1.simulations))
+            hypothesised_ys = np.vstack([make2D(hypothesised_ys)] * len(sg1.simulations))
+            hypothesised_zs = np.vstack([hy for hy, sim_gp in sg1.simulations])
+
+            # the current best concrete sample
+            best_i = np.argmax(concrete_zs) if self.maximise_cost else np.argmin(concrete_zs)
+            best_concrete_x = concrete_xs[best_i]
+            best_concrete_y = concrete_ys[best_i]
+            best_concrete_z = concrete_zs[best_i]
+
+            # next point chosen by the acquisition function to be evaluated
+            acq_chosen_point = sg1.x
+            acq_chosen_x = self.point_space.param_to_config_space(acq_chosen_point, x_param)
+            acq_chosen_y = self.point_space.param_to_config_space(acq_chosen_point, y_param)
+            acq_chosen_ac = sg1.ac
+
+            chosen_point = acq_chosen_point
+            chosen_x = acq_chosen_x
+            chosen_y = acq_chosen_y
+        else:
+            raise NotImplementedError()
 
         # extract and process the data from the second suggestion if there is one
         if num_suggestions == 2:
@@ -635,7 +699,6 @@ class BayesianOptimisationOptimiserPlotting:
             ac = acq_fun(gp_perturbed_points)
             ac = ac.reshape(*grid_size)
 
-
         fig = plt.figure(figsize=(16, 16)) # inches
         grid = gridspec.GridSpec(nrows=2, ncols=2)
         # layout:
@@ -655,9 +718,8 @@ class BayesianOptimisationOptimiserPlotting:
                 ax.set_yscale('log')
             ax.grid(False)
 
-        #TODO: decrease h_pad
         # need to specify rect so that the suptitle isn't cut off
-        fig.tight_layout(h_pad=4, w_pad=8, rect=[0, 0, 1, 0.96]) # [left, bottom, right, top] 0-1
+        fig.tight_layout(h_pad=3, w_pad=8, rect=[0, 0, 1, 0.96]) # [left, bottom, right, top] 0-1
 
         title = 'Bayesian Optimisation step {}'.format(step-self.strategy.pre_phase_steps)
         if random_fallback:
@@ -679,16 +741,16 @@ class BayesianOptimisationOptimiserPlotting:
             ax.set_xlabel('parameter {}'.format(x_param))
             ax.set_ylabel('parameter {}'.format(y_param))
             ax.plot(best_concrete_x, best_concrete_y, '*', markersize=15,
-                    color='deepskyblue', zorder=10, linestyle='None',
-                    label='best sample')
+                    color='deepskyblue', zorder=10,
+                    markeredgecolor='black', markeredgewidth=1.0, label='best sample')
             ax.plot(concrete_xs, concrete_ys, 'ro', markersize=4,
                     linestyle='None', label='samples')
             if len(hypothesised_xs) > 0:
-                ax1.plot(hypothesised_xs, hypothesised_ys, 'o', color='tomato',
-                         linestyle='None', label='hypothesised samples')
+                ax.plot(hypothesised_xs, hypothesised_ys, 'o', color='#dcdcdc',
+                         linestyle='None', markersize=4, label='hypothesised samples')
 
             ax.plot(chosen_x, chosen_y, marker='d', color='orangered',
-                    markeredgecolor='black', markeredgewidth=1.5, markersize=10,
+                    markeredgecolor='black', markeredgewidth=1.0, markersize=10,
                     linestyle='None', label='next sample')
 
         title_size = 16
@@ -715,7 +777,14 @@ class BayesianOptimisationOptimiserPlotting:
             ax4.axvline(x=acq_chosen_x, color='y')
             ax4.axhline(y=acq_chosen_y, color='y', label=label)
 
-        ax4.legend(bbox_to_anchor=(0, 1.01), loc='lower left', borderaxespad=0.0)
+        if true_cost is None:
+            ax4.legend(bbox_to_anchor=(0, 1.01), loc='lower left', borderaxespad=0.0)
+        else:
+            legend = ax2.legend(frameon=True, fancybox=True, loc='lower left')
+            legend.get_frame().set_facecolor('#ffffff')
+            legend.get_frame().set_alpha(0.5)
+
+
 
         return fig
 

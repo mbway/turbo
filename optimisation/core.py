@@ -226,6 +226,8 @@ class Evaluator(object):
             except Exception:
                 self.log('exception when testing a configuration!\n' +
                          exception_string())
+                # prevent too much spamming if the evaluator is broken completely
+                time.sleep(NON_CRITICAL_WAIT)
                 continue
 
             samples = self._convert_results(results, config)
