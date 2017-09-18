@@ -251,28 +251,26 @@ class Data1D:
         return s, y
 
     def __init__(self, f):
-        self.n = 1666 # num samples (including the samples which will be thrown out)
         nfac = 1 # factor of n to _actually_ use (this is a hack because the
                    # keep_ids are based on the assumption of 2000 samples)
-        self.n = self.n * nfac
+        n = 1666 * nfac # num samples (including the samples which will be thrown out)
 
         self.min_x = 0
         self.max_x = 10
 
-        self.full_x = make2D(np.linspace(self.min_x, self.max_x, self.n))
+        self.full_x = make2D(np.linspace(self.min_x, self.max_x, n))
         self.s, self.full_exact_y = f(self.full_x)
 
         # remove some chunks
         self.keep_ids = [(200,400), (750,1000), (1250,1450)]
         self.keep_ids = [(int(a*nfac), int(b*nfac)) for a, b in self.keep_ids]
         def remove_chunks(arr):
-            return np.vstack([arr[a:b] for a, b in self.keep_ids])
+            return np.vstack(arr[a:b] for a, b in self.keep_ids)
 
         self.x = remove_chunks(self.full_x)
         self.exact_y = remove_chunks(self.full_exact_y)
-        self.n = self.x.shape[0]
 
-        self.noise = make2D(np.random.normal(0, self.s, self.n))
+        self.noise = make2D(np.random.normal(0, self.s, self.x.shape[0]))
         self.y = self.exact_y + self.noise
 
         # 0.0 where no samples, 1.0 where there are
@@ -284,13 +282,14 @@ class Data1D:
         kernel = 1.0 * gp.kernels.Matern(nu=1.5) + gp.kernels.WhiteKernel()
         gp_params = dict(
             alpha = 1e-10, # noise level
-            kernel = kernel,
-            n_restarts_optimizer = 10,
+            kernel = kernel.clone_with_theta(np.array([5.0566808,  1.94789113, -2.29135835])),
+            optimizer = None,
+            #n_restarts_optimizer = 10,
             normalize_y = True
         )
-        gp_model = gp.GaussianProcessRegressor(**gp_params)
-        gp_model.fit(self.x, self.y)
-        self.gp_mus, self.gp_sigmas = gp_model.predict(self.full_x, return_std=True)
+        self.gp_model = gp.GaussianProcessRegressor(**gp_params)
+        self.gp_model.fit(self.x, self.y)
+        self.gp_mus, self.gp_sigmas = self.gp_model.predict(self.full_x, return_std=True)
         self.gp_sigmas = make2D(self.gp_sigmas)
         print('done')
 

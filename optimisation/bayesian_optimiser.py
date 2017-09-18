@@ -189,6 +189,14 @@ class AcquisitionStrategy(object):
             assert self.acq_fun == ac_funs.thompson_sample, \
                 'asyTS only compatible with Thompson Sampling acquisition function'
 
+    def __str__(self):
+        s = ('AcquisitionStrategy(\n\tpre_phase_steps={},\n\tacquisition_function=({}, {}),\n\t'
+             'GP_hyperparameter_strategy=("{}", {}),\n\tparallel_strategy=("{}", {}),\n\trandom_proportion={})\n)')
+        return s.format(self.pre_phase_steps, self.acq_fun, self.acq_fun_args,
+                 self.gp_strategy, self.gp_strategy_args,
+                 self.parallel_strategy, self.parallel_strategy_args,
+                 self.random_proportion)
+
     def _load_tuple_arg(self, t, allowed_values, no_match_check):
         '''
         load an argument which is allowed to be either a single value, or a

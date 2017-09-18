@@ -249,7 +249,7 @@ class Evaluator(object):
         samples = self._evaluate_config(job.config)
 
         self.log('returning results: {}'.format(
-            [(s.config, s.cost, {k:'...' for k in s.extra.keys()}) for s in samples]))
+            [(s.config, s.cost, {k:('[...]' if isinstance(v, np.ndarray) else v) for k, v in s.extra.items()}) for s in samples]))
 
         samples = [s.to_encoded_tuple() for s in samples] # for JSON serialisation
         job.evaluation_duration = time.time()-start_time

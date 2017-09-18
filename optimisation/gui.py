@@ -142,8 +142,8 @@ class LoggableGUI(qt.QWidget):
 
         self.label_font = qtg.QFont(qtg.QFont().defaultFamily(), 10)
 
-        grid = qt.QGridLayout()
-        grid.setSpacing(5)
+        self.grid = qt.QGridLayout()
+        self.grid.setSpacing(5)
 
         self.last_log_length = 0 # length of log string as of last update
         self.log = ScrollTextEdit()
@@ -156,7 +156,7 @@ class LoggableGUI(qt.QWidget):
             f = qtg.QFont('Monospace')
             f.setStyleHint(qtg.QFont.TypeWriter)
             self.log.setFont(f)
-        grid.addWidget(self.log, 0, 0)
+        self.grid.addWidget(self.log, 0, 0)
 
         self.watcher = qtc.QTimer()
         self.watcher.setInterval(500) # ms
@@ -166,12 +166,12 @@ class LoggableGUI(qt.QWidget):
         # fit the sidebar layout inside a widget to control the width
         sidebarw = qt.QWidget()
         sidebarw.setFixedWidth(200)
-        grid.addWidget(sidebarw, 0, 1)
+        self.grid.addWidget(sidebarw, 0, 1)
 
         self.sidebar = qt.QVBoxLayout()
         sidebarw.setLayout(self.sidebar)
 
-        self.setLayout(grid)
+        self.setLayout(self.grid)
         self.resize(1024, 768)
         self._center()
 
@@ -222,7 +222,7 @@ class LoggableGUI(qt.QWidget):
         for k, v in sorted(dict_.items(), key=lambda x: x[0]):
             if k in exclude:
                 s += '{}: skipped\n\n\n'.format(k)
-            elif v is not None and k in expand:
+            elif v is not None and k in expand and hasattr(k, '__dict__'):
                 s += '{}:\n{}\n\n'.format(k, indent(self._raw_string(v.__dict__, [], [])))
             else:
                 event_class = threading.Event if PY_VERSION == 3 else threading._Event
@@ -261,6 +261,11 @@ class LoggableGUI(qt.QWidget):
 
 
 class EvaluatorGUI(LoggableGUI):
+    '''
+    note: if the evaluator has an floating point attribute 'progress' which
+    varies from 0.0 to 1.0 to signify the progress of the current operation,
+    then the GUI will sync this value with a progress bar.
+    '''
     def __init__(self, evaluator, name=None):
         super().__init__()
         assert isinstance(evaluator, Evaluator)
@@ -291,6 +296,14 @@ class EvaluatorGUI(LoggableGUI):
 
         self.sidebar.addStretch() # fill remaining space
 
+        # add a progress bar if the evaluator supports it
+        if hasattr(evaluator, 'progress'):
+            self.progress = qt.QProgressBar()
+            self.progress.setRange(0, 100)
+            self.grid.addWidget(self.progress, 1, 0)
+        else:
+            self.progress = None
+
         self.update_UI()
         self.log.scroll_to_end()
 
@@ -307,6 +320,9 @@ class EvaluatorGUI(LoggableGUI):
 
     def update_UI(self):
         self.update_log(self.evaluator.log_record)
+        if self.progress is not None:
+            # progress bar only takes ints
+            self.progress.setValue(self.evaluator.progress * 100)
 
     def start(self):
         if self.evaluator_thread.isRunning():
@@ -322,7 +338,7 @@ class EvaluatorGUI(LoggableGUI):
     def show_raw(self):
         self._show_raw(self.evaluator.__dict__,
                        exclude=['log_record'],
-                       expand=['run_state'])
+                       expand=[])
 
     def closeEvent(self, event):
         if self.evaluator_thread.isRunning():
@@ -361,6 +377,13 @@ class OptimiserGUI(LoggableGUI):
 
         self._add_button('Save Checkpoint', self.save_checkpoint)
         self._add_button('Load Checkpoint', self.load_checkpoint)
+        self.auto_checkpoint = qt.QCheckBox('Auto-Checkpoint')
+        self.sidebar.addWidget(self.auto_checkpoint)
+        self.last_auto_checkpoint = 0 # number of jobs
+        self.auto_checkpoint_filename = './auto_checkpoint_{}.json'
+        self.auto_checkpoint.setToolTip(
+            'when checked, whenever a new job is finished,\n'
+            'the optimiser takes a checkpoint to "{}"'.format(self.auto_checkpoint_filename))
 
         self.info = qt.QLabel('')
 
@@ -386,6 +409,11 @@ class OptimiserGUI(LoggableGUI):
 
     def update_UI(self):
         self.update_log(self.optimiser.log_record)
+        num_finished = self.optimiser.num_finished_jobs
+        if self.auto_checkpoint.isChecked() and num_finished > self.last_auto_checkpoint:
+            self.last_auto_checkpoint = num_finished
+            self.optimiser.save_when_ready(self.auto_checkpoint_filename.format(num_finished))
+
 
     def start(self):
         if self.optimiser_thread.isRunning():
@@ -401,7 +429,7 @@ class OptimiserGUI(LoggableGUI):
     def show_raw(self):
         self._show_raw(self.optimiser.__dict__,
                        exclude=['log_record', 'samples', 'step_log'],
-                       expand=['run_state'])
+                       expand=[])
 
     def save_checkpoint(self):
         filename = self.checkpoint_filename.text()
