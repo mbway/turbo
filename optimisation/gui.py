@@ -46,6 +46,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns # prettify matplotlib
 
+#TODO: confirm dangerous actions with a popup
 
 # Local imports
 from .core import DEFAULT_HOST, DEFAULT_PORT, Evaluator, Optimiser
@@ -65,6 +66,10 @@ if in_jupyter():
     # the entire sub-area
     display(HTML('''<style>div.output_subarea.output_png{overflow:hidden;}</style>'''))
 
+def pyqt_pdb():
+    qtc.pyqtRemoveInputHook()
+    import pdb
+    pdb.set_trace()
 
 class BetterQThread(qtc.QThread):
     '''
@@ -110,6 +115,21 @@ def format_matching(doc, search, fmt, whole_line=True):
                 hl.movePosition(qtg.QTextCursor.EndOfLine, qtg.QTextCursor.KeepAnchor)
             # merge the char format with the current format
             hl.mergeCharFormat(fmt)
+
+def format_regex_color(doc, regex, color, whole_line):
+    '''
+    a helper function for the most common case of format_matching where lines
+    matching a case-insensitive regex string should be colored a certain color.
+    regex: a string representing a regular expression
+    color: a QColor object
+    '''
+    char_format = qtg.QTextCursor(doc).charFormat()
+    char_format.setForeground(color)
+
+    regex = qtc.QRegExp(regex)
+    regex.setCaseSensitivity(qtc.Qt.CaseInsensitive)
+
+    format_matching(doc, regex, char_format, whole_line=whole_line)
 
 def start_GUI(e_or_o):
     '''
@@ -186,13 +206,12 @@ class LoggableGUI(qt.QWidget):
         change the formatting on the text to highlight important words
         '''
         doc = self.log.document()
-        color = qtg.QTextCursor(doc).charFormat()
-        color.setForeground(qtc.Qt.red)
 
-        problems = qtc.QRegExp(r'(problem|error|exception|traceback)')
-        problems.setCaseSensitivity(qtc.Qt.CaseInsensitive)
+        format_regex_color(doc, r'(problem|error|exception|traceback)', qtc.Qt.red, whole_line=True)
 
-        format_matching(doc, problems, color, whole_line=True)
+        format_regex_color(doc, r'(warning|not allowing)', qtc.Qt.darkYellow, whole_line=True)
+
+        format_regex_color(doc, r'(current best)', qtc.Qt.darkGreen, whole_line=True)
 
     def update_log(self, text):
         '''
@@ -243,15 +262,16 @@ class LoggableGUI(qt.QWidget):
         frame = self.frameGeometry()
         frame.moveCenter(qt.QDesktopWidget().availableGeometry().center())
         self.move(frame.topLeft())
-    def _add_named_field(self, name, default_value, font=None):
+    def _add_named_field(self, name, default_value, font=None, widget=None):
         ''' add a label and a line edit to the sidebar '''
         font = self.label_font if font is None else font
         label = qt.QLabel(name)
         label.setFont(font)
         self.sidebar.addWidget(label)
-        edit = qt.QLineEdit(default_value)
-        self.sidebar.addWidget(edit)
-        return edit
+        if widget is None:
+            widget = qt.QLineEdit(default_value)
+        self.sidebar.addWidget(widget)
+        return widget
     def _add_button(self, name, onclick):
         ''' add a button to the sidebar '''
         button = qt.QPushButton(name)
@@ -344,7 +364,7 @@ class EvaluatorGUI(LoggableGUI):
         if self.evaluator_thread.isRunning():
             self.set_info('shutting down')
             self.evaluator.stop()
-            self.evaluator_thread.wait(time=5000) # ms
+            self.evaluator_thread.wait(5000) # ms
         self.raw.close()
         event.accept()
 
@@ -377,13 +397,29 @@ class OptimiserGUI(LoggableGUI):
 
         self._add_button('Save Checkpoint', self.save_checkpoint)
         self._add_button('Load Checkpoint', self.load_checkpoint)
+
+
+        # auto-checkpoint
+        self.auto_checkpoint_interval = qt.QSpinBox()
+        self.auto_checkpoint_interval.setRange(1, 100)
+        self.auto_checkpoint_interval.setValue(5)
+        self.auto_checkpoint_interval.setToolTip(
+            'remember, new jobs are prevented while taking a checkpoint, '
+            'so best to balance being careful with being wasteful')
+        self._add_named_field('Auto-Checkpoint Interval: ', None, widget=self.auto_checkpoint_interval)
         self.auto_checkpoint = qt.QCheckBox('Auto-Checkpoint')
+        self.auto_checkpoint.stateChanged.connect(self.auto_checkpoint_changed)
         self.sidebar.addWidget(self.auto_checkpoint)
         self.last_auto_checkpoint = 0 # number of jobs
         self.auto_checkpoint_filename = './auto_checkpoint_{}.json'
         self.auto_checkpoint.setToolTip(
-            'when checked, whenever a new job is finished,\n'
-            'the optimiser takes a checkpoint to "{}"'.format(self.auto_checkpoint_filename))
+            'when checked, whenever <interval> new jobs are finished,\n'
+            'the optimiser takes a checkpoint to "{}"\n'
+            ''.format(self.auto_checkpoint_filename))
+
+        self.sidebar.addSpacing(20)
+
+        self._add_button('Clean Log', self.clean_log)
 
         self.info = qt.QLabel('')
 
@@ -410,7 +446,8 @@ class OptimiserGUI(LoggableGUI):
     def update_UI(self):
         self.update_log(self.optimiser.log_record)
         num_finished = self.optimiser.num_finished_jobs
-        if self.auto_checkpoint.isChecked() and num_finished > self.last_auto_checkpoint:
+        interval = self.auto_checkpoint_interval.value()
+        if self.auto_checkpoint.isChecked() and num_finished > self.last_auto_checkpoint + interval:
             self.last_auto_checkpoint = num_finished
             self.optimiser.save_when_ready(self.auto_checkpoint_filename.format(num_finished))
 
@@ -438,6 +475,15 @@ class OptimiserGUI(LoggableGUI):
         filename = self.checkpoint_filename.text()
         self.optimiser.stop()
         self.optimiser.load_checkpoint(filename)
+
+    def auto_checkpoint_changed(self):
+        if self.auto_checkpoint.isChecked():
+            self.last_auto_checkpoint = self.optimiser.num_finished_jobs
+
+    def clean_log(self):
+        self.optimiser.clean_log()
+        self.log.setText(self.optimiser.log_record)
+        self.last_log_length = len(self.optimiser.log_record)
 
     def closeEvent(self, event):
         if self.optimiser_thread.isRunning():
@@ -720,35 +766,4 @@ def list_slider(list_, function, slider_name='Item N: '):
     slider.description = slider_name
     widgets.interact(lambda val: function(list_[val-1]), val=slider)
     return slider
-
-
-def main():
-    '''
-    example of the module usage
-    '''
-    from .basic_optimisers import GridSearchOptimiser
-
-    ranges = {'a':[1,2], 'b':[3,4]}
-    class TestEvaluator(Evaluator):
-        def test_config(self, config):
-            return config.a # placeholder cost function
-    optimiser = GridSearchOptimiser(ranges, order=['a','b'])
-    evaluator = TestEvaluator()
-
-    app = qt.QApplication(sys.argv)
-
-    op_gui = OptimiserGUI(optimiser)
-    ev_gui = EvaluatorGUI(evaluator)
-
-    def handle_ctrl_c(*args):
-        op_gui.close()
-        ev_gui.close()
-        app.quit()
-    signal.signal(signal.SIGINT, handle_ctrl_c)
-
-    sys.exit(app.exec_())
-
-if __name__ == '__main__':
-    main()
-
 

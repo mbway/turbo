@@ -14,6 +14,7 @@ import pickle
 import base64
 import copy
 import zlib
+import itertools
 from collections import OrderedDict
 
 
@@ -350,4 +351,18 @@ def unique_rows_close(arr, close_tolerance):
             avoid = np.append(avoid, r, axis=0)
             keep_rows.append(i)
     return arr[keep_rows]
+
+#TODO: tests
+def remove_adjacent_duplicates(list_):
+    '''
+    based on: https://stackoverflow.com/a/3463582
+    '''
+    i = 1
+    len_ = len(list_)
+    while i < len_:
+        if list_[i] == list_[i-1]:
+            del list_[i]
+            len_ -= 1
+        else:
+            i += 1
 

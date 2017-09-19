@@ -367,6 +367,23 @@ class Optimiser(OptimiserPlotting, object):
         if self.noisy:
             print(msg, end='')
 
+    def clean_log(self):
+        '''
+        remove adjacent and identical lines from the log since they only add noise.
+        '''
+        len_ = len(self.log_record)
+        lines = self.log_record.split('\n')
+        remove_adjacent_duplicates(lines)
+
+        log_record = '\n'.join(lines)
+        if len(self.log_record) == len_:
+            self.log_record = log_record
+        else:
+            # some more content was added to the log during this operation and
+            # so the operation failed. Note: This isn't completely fool proof
+            # because the check and assignment are not atomic.
+            self._log('log cleaning failed because new content was written')
+
 # Running Optimisation
 
     def _next_job(self):
@@ -407,11 +424,23 @@ class Optimiser(OptimiserPlotting, object):
             job.ID, time_string(job.total_time()),
             time_string(job.setup_duration), time_string(job.evaluation_duration)
         ))
+        if len(samples) > 1:
+            fmt = ('\tsample {sample_num:02}:\n'
+                   '\t\tcost   = {}\n'
+                   '\t\tconfig = {}\n'
+                   '\t\textra  = {}')
+        else:
+            fmt = ('\tcost   = {}\n'
+                   '\tconfig = {}\n'
+                   '\textra  = {}')
         for i, s in enumerate(samples):
-            self._log('\tsample {:02}: config={}, cost={:.2g}{}'.format(
-                i, config_string(s.config, precise=True), s.cost,
-                (' (current best)' if self.sample_is_best(s) else '')
-            ))
+            if self.sample_is_best(s):
+                self._log('\tcurrent best')
+            self._log(fmt.format(
+                          s.cost,
+                          config_string(s.config, order=self.params, precise=True),
+                          {k:('...' if isinstance(v, np.ndarray) else v) for k, v in s.extra.items()},
+                          sample_num=i))
 
     def _shutdown_message(self, state):
         '''
@@ -472,6 +501,7 @@ class Optimiser(OptimiserPlotting, object):
                 return op_net.empty_msg()
 
             else:
+                self._log('obtaining next config to evaluate')
                 job = self._next_job()
                 # store in-case it has to be re-sent
                 state.requested_job = job
@@ -586,6 +616,8 @@ class Optimiser(OptimiserPlotting, object):
             if request['type'] == 'job_request':
                 # the interaction that succeeded was a job request
                 state.requested_job = None # job reached evaluator
+                if response != op_net.empty_msg():
+                    self._log('job sent successfully')
 
         try:
             op_net.message_server((host, port), timeout,
@@ -638,6 +670,7 @@ class Optimiser(OptimiserPlotting, object):
                 self._handle_checkpoint() # save a checkpoint if signalled to
                 assert self._ready_for_next_configuration(), \
                     'not ready for the next configuration in sequential optimisation'
+                self._log('obtaining next config to evaluate')
                 job = self._next_job()
                 if job is None:
                     state.out_of_configs = True
@@ -801,7 +834,9 @@ class Optimiser(OptimiserPlotting, object):
               optimiser initialised identically to this one should load the
               checkpoint.
         '''
-        assert self._consistent_and_quiescent()
+        if not self._consistent_and_quiescent():
+            self._log('warning: optimiser is not quiescent and or consistent when '
+                      'taking a checkpoint, the checkpoint may be corrupted')
 
         # either use the default value or set the default value
         if filename is None:
@@ -848,7 +883,9 @@ class Optimiser(OptimiserPlotting, object):
                 return
             self._load_dict(save)
 
-        assert self._consistent_and_quiescent()
+        if not self._consistent_and_quiescent():
+            self._log('warning: loaded checkpoint is not consistent or the '
+                      'optimiser was not quiescent when loading')
 
 
     def _save_dict(self):

@@ -252,7 +252,7 @@ class AcquisitionStrategy(object):
     #TODO: move to optimiser
     def get_name(self, maximise_cost):
         if self.parallel_strategy == 'mc':
-            prefix = 'Integrated-'
+            prefix = 'Mean-'
         else:
             prefix = ''
 
@@ -310,7 +310,7 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
             values to search for the optimum within.
         maximise_cost: bool
             True => larger cost is better. False => smaller cost is better
-        acquisition_strategy: AcquisitionStrategy. TODO: None => default
+        acquisition_strategy: AcquisitionStrategy. None => default
             describes the high-level behaviour for the Bayesian optimisation
             algorithm, such as the acquisition function to use and how to handle
             parallelism.
@@ -759,7 +759,11 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
                             eq_rows(step.hx, s.hy), np.isscalar(s.ac), s.hy.shape[1] == 1
                         ))
                     elif isinstance(s, Step.MC_MaxAcqSuggestion):
-                        raise NotImplementedError()
+                        step_log_valid &= all(
+                            all((eq_rows(step.hx, sim[0]), sim[0].shape[1] == 1))
+                            for sim in s.simulations
+                        )
+                        step_log_valid &= np.isscalar(s.ac)
                     else:
                         step_log_valid = False
                 if not step_log_valid:
