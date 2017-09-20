@@ -801,16 +801,19 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
             if len(step['hx'])== 0:
                 step['hx'] = np.empty(shape=(0, self.point_space.num_attribs))
 
+            convert_hy = lambda hy: np.empty(shape=(0, 1)) if len(hy) == 0 else np.array(hy)
             suggestions = []
             for type_, s in step['suggestions']:
                 s['x'] = np.array(s['x'])
                 if type_ == 'RandomSuggestion':
                     suggestions.append(Step.RandomSuggestion(**s))
                 elif type_ == 'MaxAcqSuggestion':
-                    s['hy'] = np.empty(shape=(0, 1)) if len(s['hy']) == 0 else np.array(s['hy'])
+                    s['hy'] = convert_hy(s['hy'])
                     suggestions.append(Step.MaxAcqSuggestion(**s))
                 elif type_ == 'MC_MaxAcqSuggestion':
-                    raise NotImplementedError()
+                    #TODO: handle ac_random_state
+                    s['simulations'] = [(convert_hy(hy), sim_gp) for hy, sim_gp in s['simulations']]
+                    suggestions.append(Step.MC_MaxAcqSuggestion(**s))
                 else:
                     raise ValueError(type_)
             step['suggestions'] = suggestions

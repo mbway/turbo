@@ -37,6 +37,7 @@ def restore_GP(stored_params, gp_params, xs, ys):
     xs, ys: the data set that the original GP was trained on
     returns: a new GP which is identical to the original GP
     '''
+    stored_params = np.array(stored_params)
     gp_model = gp.GaussianProcessRegressor(**gp_params)
     p = gp_model.get_params()
     kernel = p['kernel']

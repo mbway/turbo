@@ -813,6 +813,16 @@ class Optimiser(OptimiserPlotting, object):
             self.checkpoint_filename = filename
         self._checkpoint_flag.set()
 
+    def cancel_save(self):
+        '''
+        if save_when_ready has been called, but you wish to abort the checkpoint
+        so that new jobs can be started again, this function will instruct the
+        optimiser to stop waiting for quiescence and continue without saving.
+        '''
+        if self._checkpoint_flag.is_set():
+            self._log('cancelling checkpoint. Continuing as normal.')
+            self._checkpoint_flag.clear()
+
     def _handle_checkpoint(self):
         if self._checkpoint_flag.is_set():
             self.save_now()

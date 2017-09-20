@@ -616,9 +616,10 @@ class BayesianOptimisationOptimiserPlotting:
             # the GP is trained in point space
             gp_xs = self.point_space.param_to_point_space(all_xs, x_param)
             gp_ys = self.point_space.param_to_point_space(all_ys, y_param)
+            # passed as 'first index', 'second index'
             gp_X, gp_Y = np.meshgrid(gp_xs, gp_ys)
-            grid_size = (len(all_xs), len(all_ys)) # shape of gp_X and gp_Y
-            assert grid_size == gp_X.shape
+            grid_size = (len(all_ys), len(all_xs))
+            assert grid_size == gp_X.shape == gp_Y.shape
             # all combinations of x and y values, each point as a row
             #TODO: would hstack work instead of transposing?
             gp_points = np.vstack((gp_X.ravel(), gp_Y.ravel())).T # ravel squashes to 1D

@@ -396,6 +396,7 @@ class OptimiserGUI(LoggableGUI):
             'filename:', optimiser.checkpoint_filename)
 
         self._add_button('Save Checkpoint', self.save_checkpoint)
+        self._add_button('Cancel Checkpoint', self.cancel_checkpoint)
         self._add_button('Load Checkpoint', self.load_checkpoint)
 
 
@@ -471,6 +472,8 @@ class OptimiserGUI(LoggableGUI):
     def save_checkpoint(self):
         filename = self.checkpoint_filename.text()
         self.optimiser.save_when_ready(filename)
+    def cancel_checkpoint(self):
+        self.optimiser.cancel_save()
     def load_checkpoint(self):
         filename = self.checkpoint_filename.text()
         self.optimiser.stop()
