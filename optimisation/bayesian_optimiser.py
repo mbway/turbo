@@ -8,14 +8,13 @@ from .py2 import *
 
 import numpy as np
 
-import sklearn.gaussian_process as gp
-
 # local modules
 from .core import Optimiser, Sample
 from .utils import *
 from .bayesian_utils import *
 from .plot import BayesianOptimisationOptimiserPlotting
 from . import acquisition_functions as ac_funs
+from .surrogates import SciKitGPSurrogate # default
 
 
 class AcquisitionStrategy(object):
@@ -98,8 +97,8 @@ class AcquisitionStrategy(object):
                         'N': the number of simulations to use.
                         'num_threads': #TODO
                         'sim_train_its': the number of optimiser restarts to
-                            allow the GPs for each simulation. 0 => re-use the
-                            hyperparameters of the main suggestion GP.
+                            allow the GPs for each simulation. None => re-use
+                            the hyperparameters of the main suggestion GP.
                 'asyTS': asynchronous Thompson sampling. Ignore unfinished
                     evaluations and perform Thompson sampling on the GP
                     posterior as normal. Only possible when using the TS
@@ -175,7 +174,7 @@ class AcquisitionStrategy(object):
                 ('kb', ('kriging believer'), {},
                     lambda args,keys: not keys),
                 ('mc', ('monte carlo', 'monte-carlo'),
-                    {'N' : 20, 'sim_train_its' : 0},
+                    {'N' : 20, 'sim_train_its' : None},
                     lambda args,keys: keys <= {'N', 'num_threads', 'sim_train_its'}),
                 ('asyts', (), {},
                     lambda args,keys: not keys)
@@ -303,7 +302,7 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
     '''
 
     def __init__(self, ranges, maximise_cost, acquisition_strategy,
-                 gp_params=None, maximisation_args=None, close_tolerance=1e-5):
+                 Surrogate=None, maximisation_args=None, close_tolerance=1e-5):
         '''
         ranges: dict
             A dictionary of parameter names to arrays which span the range of
@@ -314,10 +313,8 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
             describes the high-level behaviour for the Bayesian optimisation
             algorithm, such as the acquisition function to use and how to handle
             parallelism.
-        gp_params: dict/None
-            parameters for the Gaussian Process surrogate function, None will
-            choose some sensible defaults. (See "sklearn gaussian process
-            regressor")
+        Surrogate: class/None
+            a class for constructing surrogate models of the function being optimised
         maximisation_args: dict/None
             parameters for determining the procedure for maximising the
             acquisition function. None to use default values, or a dictionary
@@ -364,21 +361,7 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
             # canonical format and validates it.
             self.strategy = acquisition_strategy
 
-        if gp_params is None:
-            self.gp_params = dict(
-                alpha = 1e-10, # larger => more noise. Default = 1e-10
-                # nu=1.5 assumes the target function is once-differentiable
-                kernel = 1.0 * gp.kernels.Matern(nu=1.5) + gp.kernels.WhiteKernel(),
-                #kernel = 1.0 * gp.kernels.RBF(),
-                n_restarts_optimizer = 10,
-                # make the mean 0 (theoretically a bad thing, see docs, but can help)
-                # with the constant offset in the kernel this shouldn't be required
-                #normalize_y = True,
-                copy_X_train = True # whether to make a copy of the training data (in-case it is modified)
-            )
-        else:
-            self.gp_params = gp_params
-
+        self.Surrogate = Surrogate if Surrogate is not None else SciKitGPSurrogate
 
         self.close_tolerance = close_tolerance
 
@@ -422,9 +405,9 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
 
         # [(job_ID, Step)]: steps which have been started but have not finished
         self.outstanding_steps = []
-        # a GP trained on only the concrete samples, only used for some
+        # a surrogate trained on only the concrete samples, only used for some
         # acquisition strategies.
-        self.concrete_gp = None
+        self.concrete_sur = None
 
         self.step_log = {}
         self.step_log_keep = 100 # max number of steps to keep
@@ -508,28 +491,12 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
 
         return sx, sy, hx
 
-    def _train_gp(self, xs, ys, theta=None):
-        '''
-        return a GP trained on the given data
-        xs, ys: the data set to train the GP on
-        theta: optional, specify the parameters for the GP to skip the
-            optimisation section of the training
-        '''
-        if theta is not None:
-            gp_model = restore_GP(theta, self.gp_params, xs, ys)
-        else:
-            gp_model = gp.GaussianProcessRegressor(**self.gp_params)
-            log_warning = lambda warn: self._log('warning training GP: {}'.format(warn))
-            with WarningCatcher(log_warning):
-                gp_model.fit(xs, ys)
-        return gp_model
-
-    def _get_acq_fun(self, gp_model, ys):
+    def _get_acq_fun(self, sur, ys):
         '''
         return a partially applied acquisition function which takes a single
         argument: an ndarray of points to evaluate the acquisition function at.
 
-        gp_model: the trained GP to use for evaluating
+        sur: the trained surrogate model to use for predicting
         ys: cost values for the concrete and hypothesised samples
         '''
         acq = self.strategy.acq_fun
@@ -539,7 +506,7 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
                    ac_funs.expected_improvement]:
             chooser = np.max if self.maximise_cost else np.min
             best_cost = chooser(ys)
-            return lambda xs: acq(xs, gp_model, self.maximise_cost, best_cost, **acq_params)
+            return lambda xs: acq(xs, sur, self.maximise_cost, best_cost, **acq_params)
 
         elif acq == ac_funs.thompson_sample:
             raise NotImplementedError()
@@ -549,7 +516,7 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
                 raise NotImplementedError()
                 # t = job_ID?
                 acq_params = {'kappa' : 123}
-            return lambda xs: acq(xs, gp_model, self.maximise_cost, **acq_params)
+            return lambda xs: acq(xs, sur, self.maximise_cost, **acq_params)
 
         else:
             raise ValueError()
@@ -564,7 +531,6 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
             xs, ys = sx, sy
 
         elif self.strategy.parallel_strategy == 'kb': # Kriging Believer
-            log_warning = lambda w: self._log('warning predicting hy: {}'.format(warn))
             # use the data saved in the outstanding steps to get the
             # hypothesised cost for the points in hx.
             # there will be at least one step since len(hx) != 0
@@ -572,10 +538,10 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
             for job_ID, step in self.outstanding_steps:
                 s0 = step.suggestions[0]
                 assert isinstance(s0, Step.MaxAcqSuggestion)
-                with WarningCatcher(log_warning):
-                    gp = restore_GP(s0.gp, self.gp_params,
-                                    np.vstack((step.sx, step.hx)), np.vstack((step.sy, s0.hy)))
-                    hy.append(gp.predict(step.chosen_x()))
+                sur = self.Surrogate(self)
+                sur.fit(np.vstack((step.sx, step.hx)), np.vstack((step.sy, s0.hy)),
+                        hyper_params=s0.sur)
+                hy.append(sur.predict(step.chosen_x()))
             hy = np.vstack(hy)
 
             xs, ys = np.vstack((sx, hx)), np.vstack((sy, hy))
@@ -583,14 +549,17 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
         else:
             raise NotImplementedError()
 
-        gp_model = self._train_gp(xs, ys)
-        acq = self._get_acq_fun(gp_model, ys) # partially apply
+        # train a model to be a cheap to evaluate 'surrogate' for the true
+        # function being optimised.
+        sur = self.Surrogate(self)
+        sur.fit(xs, ys)
+        acq = self._get_acq_fun(sur, ys) # partially apply
 
         # suggest_x may be None if the maximisation failed
         suggest_x, suggest_ac = self._maximise_acquisition(acq)
 
         return Step.MaxAcqSuggestion(
-            hy=hy, gp=store_GP(gp_model), x=suggest_x, ac=suggest_ac)
+            hy=hy, sur=sur.get_hyper_params(), x=suggest_x, ac=suggest_ac)
 
 
     def _max_mc_acq_suggestion(self, data_set):
@@ -598,22 +567,19 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
         assert self.strategy.parallel_strategy == 'mc'
         assert len(hx) != 0 # should only be called when there are outstanding steps
 
-        # if there have been no new concrete samples, just re-use the last GP
-        if self.concrete_gp is None or np.any(self.concrete_gp.y_train_ != sy):
-            self.concrete_gp = self._train_gp(sx, sy)
-        concrete_params = store_GP(self.concrete_gp)
+        # if there have been no new concrete samples, just re-use the last surrogate
+        if self.concrete_sur is None or np.any(self.concrete_sur.get_training_set()[1] != sy):
+            self.concrete_sur = self.Surrogate(self)
+            self.concrete_sur.fit(sx, sy)
+        concrete_params = self.concrete_sur.get_hyper_params()
 
-        log_warning = lambda w: self._log('GP warning: {}'.format(warn))
-        with WarningCatcher(log_warning):
-            # the number of samples to draw for each outstanding step
-            N = self.strategy.parallel_strategy_args['N']
-            hy = []
-            for job_ID, step in self.outstanding_steps:
-                # by default random_state uses a fixed seed! Setting to None
-                # uses the current numpy random state.
-                chosen_hys = self.concrete_gp.sample_y(step.chosen_x(), N, random_state=None)
-                assert chosen_hys.shape == (1, 1, N)
-                hy.append(chosen_hys.reshape(1, N))
+        # the number of samples to draw for each outstanding step
+        N = self.strategy.parallel_strategy_args['N']
+        hy = []
+        for job_ID, step in self.outstanding_steps:
+            chosen_hys = self.concrete_sur.sample(step.chosen_x(), N)
+            assert chosen_hys.shape == (1, 1, N)
+            hy.append(chosen_hys.reshape(1, N))
 
         # hys is a list where each element is a set of sampled values
         # corresponding to hx (ie multiple versions of hy)
@@ -622,37 +588,33 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
 
         # run each simulation
         train_its = self.strategy.parallel_strategy_args['sim_train_its']
-        if train_its != 0:
-            sim_gp_params = self.gp_params.copy()
-            sim_gp_params['n_restarts_optimizer'] = train_its
-        # [(hy, sim_gp)]
+        # [(hy, sur)]
         sims = []
         # list of acquisition functions for each simulation
         sim_acq_funs = []
-        with WarningCatcher(log_warning):
-            for hy in hys:
-                ys = np.vstack((sy, hy))
+        for hy in hys:
+            ys = np.vstack((sy, hy))
 
-                # fit the GP to the points of this simulation
-                if train_its == 0: # re-use the main GP
-                    sim_gp = restore_GP(concrete_params, self.gp_params, xs, ys)
-                    sims.append((hy, None)) # None => re-using the concrete GP params
-                else:
-                    sim_gp = gp.GaussianProcessRegressor(**sim_gp_params)
-                    sim_gp.fit(xs, ys)
-                    sims.append((hy, store_GP(sim_gp)))
+            # fit the surrogate model to the points of this simulation
+            sim_sur = self.Surrogate(self)
+            if train_its is None:
+                sim_sur.fit(xs, ys, hyper_params=concrete_params)
+                sims.append((hy, None)) # None => re-using the concrete params
+            else:
+                sim_sur.fit(xs, ys, max_its=train_its)
+                sims.append((hy, sim_sur.get_hyper_params()))
 
-                acq = self._get_acq_fun(sim_gp, ys) # partially apply
-                sim_acq_funs.append(acq)
+            acq = self._get_acq_fun(sim_sur, ys) # partially apply
+            sim_acq_funs.append(acq)
 
-            # average acquisition across every simulation
-            acq_fun = lambda xs: 1.0/len(sim_acq_funs) * np.sum(acq(xs) for acq in sim_acq_funs)
+        # average acquisition across every simulation
+        acq_fun = lambda xs: 1.0/len(sim_acq_funs) * np.sum(acq(xs) for acq in sim_acq_funs)
 
-            # suggest_x may be None if the maximisation failed
-            suggest_x, suggest_ac = self._maximise_acquisition(acq_fun)
+        # suggest_x may be None if the maximisation failed
+        suggest_x, suggest_ac = self._maximise_acquisition(acq_fun)
 
         return Step.MC_MaxAcqSuggestion(
-            gp=concrete_params,
+            sur=concrete_params,
             simulations=sims,
             x=suggest_x,
             ac=suggest_ac
@@ -812,7 +774,7 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
                     suggestions.append(Step.MaxAcqSuggestion(**s))
                 elif type_ == 'MC_MaxAcqSuggestion':
                     #TODO: handle ac_random_state
-                    s['simulations'] = [(convert_hy(hy), sim_gp) for hy, sim_gp in s['simulations']]
+                    s['simulations'] = [(convert_hy(hy), sim_sur) for hy, sim_sur in s['simulations']]
                     suggestions.append(Step.MC_MaxAcqSuggestion(**s))
                 else:
                     raise ValueError(type_)
@@ -824,5 +786,5 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
 
         # reset any progress attributes
         self.outstanding_steps = []
-        self.concrete_gp = None
+        self.concrete_sur = None
 

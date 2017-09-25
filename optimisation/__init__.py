@@ -8,4 +8,5 @@ from .core import Job, Sample, Evaluator, Optimiser
 from .basic_optimisers import GridSearchOptimiser, RandomSearchOptimiser
 from .bayesian_optimiser import AcquisitionStrategy, BayesianOptimisationOptimiser
 from . import acquisition_functions as ac_funs
+from .surrogates import *
 

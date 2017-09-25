@@ -219,7 +219,7 @@ class BayesianOptimisationOptimiserPlotting:
         points[:,param_index] = xs
         return points
 
-    def plot_step_1D(self, param, step, true_cost=None, n_sigma=2, gp_through_all=True):
+    def plot_step_1D(self, param, step, true_cost=None, n_sigma=2, sur_through_all=True):
         '''
         plot a Bayesian optimisation step, perturbed along a single parameter.
 
@@ -239,8 +239,8 @@ class BayesianOptimisationOptimiserPlotting:
         n_sigma: the number of standard deviations from the mean to plot the
             uncertainty confidence interval.
             Note 1=>68%, 2=>95%, 3=>99% (for a normal distribution, which this is)
-        gp_through_all: whether to plot a gp prediction through every sample or
-            just through the location of the next point to be chosen
+        sur_through_all: whether to plot a surrogate prediction through every
+            sample or just through the location of the next point to be chosen
         '''
         assert step in self.step_log, 'step not recorded in the log'
 
@@ -264,14 +264,15 @@ class BayesianOptimisationOptimiserPlotting:
             xs = np.vstack((s.sx, s.hx))
             ys = np.vstack((s.sy, sg1.hy))
 
-            # restore from just the hyperparameters to a GP which can be queried
-            gp_model = restore_GP(sg1.gp, self.gp_params, xs, ys)
+            # restore from just the hyperparameters to a surrogate model which can be queried
+            sur = self.Surrogate(self)
+            sur.fit(xs, ys, hyper_params=sg1.sur)
 
-            acq_fun = self._get_acq_fun(gp_model, ys)
+            acq_fun = self._get_acq_fun(sur, ys)
             sims = False # no simulations for this strategy
 
-            # the GP is trained in point space
-            gp_xs = self.point_space.param_to_point_space(all_xs, param)
+            # the surrogate model is trained in point space
+            ps_xs = self.point_space.param_to_point_space(all_xs, param)
 
             # the values for the chosen parameter for the concrete and
             # hypothesised samples in config space.
@@ -301,26 +302,28 @@ class BayesianOptimisationOptimiserPlotting:
             # (hx, hy) if there are any
             xs = np.vstack((s.sx, s.hx))
 
-            # restore from just the hyperparameters to a GP which can be queried
-            gp_model = restore_GP(sg1.gp, self.gp_params, s.sx, s.sy)
+            # restore from just the hyperparameters to a surrogate model which can be queried
+            sur = self.Surrogate(self)
+            sur.fit(xs, ys, hyper_params=sg1.sur)
 
             sims = True # simulations used in this strategy
-            sim_gps = []
+            sim_surs = []
             sim_ac_funs = [] # the acquisition functions for each simulation
-            for hy, sim_gp in sg1.simulations:
+            for hy, sim_params in sg1.simulations:
                 ys = np.vstack((s.sy, hy))
-                sim_gp = sim_gp if sim_gp is not None else sg1.gp
-                # fit the GP to the points of this simulation
-                sim_gp = restore_GP(sim_gp, self.gp_params, xs, ys)
-                acq = self._get_acq_fun(sim_gp, ys) # partially apply
+                sim_params = sim_params if sim_params is not None else sg1.sur
+                # fit the surrogate model to the points of this simulation
+                sim_sur = self.Surrogate(self)
+                sim_sur.fit(xs, ys, hyper_params=sim_params)
+                acq = self._get_acq_fun(sim_sur, ys) # partially apply
                 sim_ac_funs.append(acq)
-                sim_gps.append(sim_gp)
+                sim_surs.append(sim_sur)
 
             # average acquisition across every simulation
             acq_fun = lambda xs: 1.0/len(sg1.simulations) * np.sum(acq(xs) for acq in sim_ac_funs)
 
-            # the GP is trained in point space
-            gp_xs = self.point_space.param_to_point_space(all_xs, param)
+            # the surrogate model is trained in point space
+            ps_xs = self.point_space.param_to_point_space(all_xs, param)
 
             # the values for the chosen parameter for the concrete and
             # hypothesised samples in config space.
@@ -328,7 +331,7 @@ class BayesianOptimisationOptimiserPlotting:
             concrete_ys = s.sy
             hypothesised_xs = self.point_space.param_to_config_space(s.hx, param).flatten()
             hypothesised_xs = np.vstack([make2D(hypothesised_xs)] * len(sg1.simulations))
-            hypothesised_ys = np.vstack([hy for hy, sim_gp in sg1.simulations])
+            hypothesised_ys = np.vstack([hy for hy, sim_sur in sg1.simulations])
 
             # the current best concrete sample (x is only the value along the
             # chosen parameter in config space)
@@ -371,12 +374,12 @@ class BayesianOptimisationOptimiserPlotting:
             # corresponding to the next point to be chosen, whether it is the
             # suggestion by the acquisition function maximisation or the random
             # suggestion.
-            gp_perturbed_points = self._points_vary_one(chosen_point, param, gp_xs)
-            ac = acq_fun(gp_perturbed_points)
+            ps_perturbed_points = self._points_vary_one(chosen_point, param, ps_xs)
+            ac = acq_fun(ps_perturbed_points)
 
             if sims:
-                sim_ac = [acq(gp_perturbed_points) for acq in sim_ac_funs]
-                sim_mus = [gp.predict(gp_perturbed_points).flatten() for gp in sim_gps]
+                sim_ac = [acq(ps_perturbed_points) for acq in sim_ac_funs]
+                sim_mus = [sur.predict(ps_perturbed_points).flatten() for sur in sim_surs]
 
         fig = plt.figure(figsize=(16, 10)) # inches
         grid = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=[2, 1])
@@ -417,11 +420,11 @@ class BayesianOptimisationOptimiserPlotting:
                  color='deepskyblue', zorder=10, label='best sample')
 
         ### Plot Surrogate Function
-        def plot_gp_prediction_through(point, mu_label, sigma_label, mu_alpha, sigma_alpha):
+        def plot_sur_prediction_through(point, mu_label, sigma_label, mu_alpha, sigma_alpha):
             # points with all but the chosen parameter fixed to match the given
             # config, but the chosen parameter varies
-            perturbed = self._points_vary_one(point, param, gp_xs)
-            mus, sigmas = gp_model.predict(perturbed, return_std=True)
+            perturbed = self._points_vary_one(point, param, ps_xs)
+            mus, sigmas = sur.predict(perturbed, std_dev=True)
             mus = mus.flatten()
             ax1.plot(all_xs, mus, 'm-', label=mu_label, alpha=mu_alpha, linewidth=1.0)
             ax1.fill_between(all_xs, mus - n_sigma*sigmas, mus + n_sigma*sigmas, alpha=sigma_alpha,
@@ -433,7 +436,7 @@ class BayesianOptimisationOptimiserPlotting:
             for mus in sim_mus:
                 ax1.plot(all_xs, mus, 'm:', linewidth=1.0)
 
-        plot_gp_prediction_through(chosen_point,
+        plot_sur_prediction_through(chosen_point,
             mu_label='surrogate cost', sigma_label='uncertainty ${}\\sigma$'.format(n_sigma),
             mu_alpha=1, sigma_alpha=0.25)
 
@@ -456,11 +459,11 @@ class BayesianOptimisationOptimiserPlotting:
                 # cap to make sure they don't become invisible
                 alpha = max(0.4/param_zeroed.shape[0], 0.015)
                 for row in param_zeroed:
-                    plot_gp_prediction_through(make2D_row(row),
+                    plot_sur_prediction_through(make2D_row(row),
                         mu_label=None, sigma_label=None,
                         mu_alpha=alpha, sigma_alpha=alpha)
 
-        if gp_through_all:
+        if sur_through_all:
             predictions_through_all_samples()
 
 
@@ -548,21 +551,23 @@ class BayesianOptimisationOptimiserPlotting:
             xs = np.vstack((s.sx, s.hx))
             ys = np.vstack((s.sy, sg1.hy))
 
-            # restore from just the hyperparameters to a GP which can be queried
-            gp_model = restore_GP(sg1.gp, self.gp_params, xs, ys)
+            # restore from just the hyperparameters to a surrogate model which can be queried
+            sur = self.Surrogate(self)
+            sur.fit(xs, ys, hyper_params=sg1.sur)
 
-            acq_fun = self._get_acq_fun(gp_model, ys)
+            acq_fun = self._get_acq_fun(sur, ys)
             sims = False # no simulations for this strategy
 
-            # the GP is trained in point space
-            gp_xs = self.point_space.param_to_point_space(all_xs, x_param)
-            gp_ys = self.point_space.param_to_point_space(all_ys, y_param)
-            gp_X, gp_Y = np.meshgrid(gp_xs, gp_ys)
-            grid_size = (len(all_xs), len(all_ys)) # shape of gp_X and gp_Y
-            assert grid_size == gp_X.shape
+            # the surrogate model is trained in point space
+            ps_xs = self.point_space.param_to_point_space(all_xs, x_param)
+            ps_ys = self.point_space.param_to_point_space(all_ys, y_param)
+            # passed as 'first index', 'second index'
+            ps_X, ps_Y = np.meshgrid(ps_xs, ps_ys)
+            grid_size = (len(all_ys), len(all_xs))
+            assert grid_size == ps_X.shape == ps_Y.shape
             # all combinations of x and y values, each point as a row
             #TODO: would hstack work instead of transposing?
-            gp_points = np.vstack((gp_X.ravel(), gp_Y.ravel())).T # ravel squashes to 1D
+            ps_points = np.vstack((ps_X.ravel(), ps_Y.ravel())).T # ravel squashes to 1D
 
             # the values for the chosen parameter for the concrete and
             # hypothesised samples in config space.
@@ -595,34 +600,36 @@ class BayesianOptimisationOptimiserPlotting:
             # (hx, hy) if there are any
             xs = np.vstack((s.sx, s.hx))
 
-            # restore from just the hyperparameters to a GP which can be queried
-            gp_model = restore_GP(sg1.gp, self.gp_params, s.sx, s.sy)
+            # restore from just the hyperparameters to a surrogate model which can be queried
+            sur = self.Surrogate(self)
+            sur.fit(xs, ys, hyper_params=sg1.sur)
 
             sims = True # simulations used in this strategy
-            sim_gps = []
+            sim_surs = []
             sim_ac_funs = [] # the acquisition functions for each simulation
-            for hy, sim_gp in sg1.simulations:
+            for hy, sim_params in sg1.simulations:
                 ys = np.vstack((s.sy, hy))
-                sim_gp = sim_gp if sim_gp is not None else sg1.gp
-                # fit the GP to the points of this simulation
-                sim_gp = restore_GP(sim_gp, self.gp_params, xs, ys)
-                acq = self._get_acq_fun(sim_gp, ys) # partially apply
+                sim_params = sim_params if sim_params is not None else sg1.sur
+                # fit the surrogate model to the points of this simulation
+                sim_sur = self.Surrogate(self)
+                sim_sur.fit(xs, ys, hyper_params=sim_params)
+                acq = self._get_acq_fun(sim_sur, ys) # partially apply
                 sim_ac_funs.append(acq)
-                sim_gps.append(sim_gp)
+                sim_surs.append(sim_sur)
 
             # average acquisition across every simulation
             acq_fun = lambda xs: 1.0/len(sg1.simulations) * np.sum(acq(xs) for acq in sim_ac_funs)
 
-            # the GP is trained in point space
-            gp_xs = self.point_space.param_to_point_space(all_xs, x_param)
-            gp_ys = self.point_space.param_to_point_space(all_ys, y_param)
+            # the surrogate model is trained in point space
+            ps_xs = self.point_space.param_to_point_space(all_xs, x_param)
+            ps_ys = self.point_space.param_to_point_space(all_ys, y_param)
             # passed as 'first index', 'second index'
-            gp_X, gp_Y = np.meshgrid(gp_xs, gp_ys)
+            ps_X, ps_Y = np.meshgrid(ps_xs, ps_ys)
             grid_size = (len(all_ys), len(all_xs))
-            assert grid_size == gp_X.shape == gp_Y.shape
+            assert grid_size == ps_X.shape == ps_Y.shape
             # all combinations of x and y values, each point as a row
             #TODO: would hstack work instead of transposing?
-            gp_points = np.vstack((gp_X.ravel(), gp_Y.ravel())).T # ravel squashes to 1D
+            ps_points = np.vstack((ps_X.ravel(), ps_Y.ravel())).T # ravel squashes to 1D
 
             # the values for the chosen parameter for the concrete and
             # hypothesised samples in config space.
@@ -634,7 +641,7 @@ class BayesianOptimisationOptimiserPlotting:
             hypothesised_ys = self.point_space.param_to_config_space(s.hx, y_param).flatten()
             hypothesised_xs = np.vstack([make2D(hypothesised_xs)] * len(sg1.simulations))
             hypothesised_ys = np.vstack([make2D(hypothesised_ys)] * len(sg1.simulations))
-            hypothesised_zs = np.vstack([hy for hy, sim_gp in sg1.simulations])
+            hypothesised_zs = np.vstack([hy for hy, sim_sur in sg1.simulations])
 
             # the current best concrete sample
             best_i = np.argmax(concrete_zs) if self.maximise_cost else np.argmin(concrete_zs)
@@ -689,15 +696,15 @@ class BayesianOptimisationOptimiserPlotting:
 
         # points with all but the chosen parameter fixed to match the given
         # config, but the focused parameters vary
-        gp_perturbed_points = self._points_vary_one(plot_through, x_param, gp_points[:,0])
+        ps_perturbed_points = self._points_vary_one(plot_through, x_param, ps_points[:,0])
         y_index = self.point_space.param_indices[y_param]
-        gp_perturbed_points[:,y_index] = gp_points[:,1]
+        ps_perturbed_points[:,y_index] = ps_points[:,1]
 
         if acq_fun:
-            mus, sigmas = gp_model.predict(gp_perturbed_points, return_std=True)
+            mus, sigmas = sur.predict(ps_perturbed_points, std_dev=True)
             mus = mus.reshape(*grid_size)
             sigmas = sigmas.reshape(*grid_size)
-            ac = acq_fun(gp_perturbed_points)
+            ac = acq_fun(ps_perturbed_points)
             ac = ac.reshape(*grid_size)
 
         fig = plt.figure(figsize=(16, 16)) # inches

@@ -194,23 +194,35 @@ class Evaluator(object):
         test_config may return several different things. This function converts
         those results into a standard form: a list of Sample objects.
         '''
+        # permit 'scalar' ndarrays, but convert them to true scalars
+        if isinstance(results, np.ndarray) and results.size == 1:
+            results = np.asscalar(results)
         # test_config can return either a cost value, a sample object or a list
         # of sample objects
         if is_numeric(results):
             # evaluator returned cost
-            return [Sample(config, results)]
+            results = [Sample(config, results)]
         elif (isinstance(results, tuple) and len(results) == 2 and
               is_numeric(results[0]) and isinstance(results[1], dict)):
             # evaluator returned cost and extra as a tuple
-            return [Sample(config, results[0], results[1])]
+            results = [Sample(config, results[0], results[1])]
         elif isinstance(results, Sample):
             # evaluator returned a single sample
-            return [results]
+            results = [results]
         elif isinstance(results, list) and all(isinstance(r, Sample) for r in results):
             # evaluator returned a list of samples
-            return results
+            results = results
         else:
-            raise ValueError('invalid results type from evaluator')
+            raise ValueError('invalid results type from evaluator: {} {}'.format(results, type(results)))
+
+        if any(set(res.config.keys()) != set(config.keys()) for res in results):
+            raise ValueError('incorrect entries in config dict: {}'.format(results))
+
+        # cost values cannot be NaN or infinity because this breaks the surrogate model
+        if any(np.isnan(res.cost) or np.isinf(res.cost) for res in results):
+            raise ValueError('invalid cost (infinity or NaN): {}'.format(results))
+
+        return results
 
     def _evaluate_config(self, config):
         '''
@@ -222,7 +234,8 @@ class Evaluator(object):
         '''
         while True:
             try:
-                results = self.test_config(config)
+                # pass a copy to keep 'config' intact for reference later
+                results = self.test_config(config.copy())
             except Exception:
                 self.log('exception when testing a configuration!\n' +
                          exception_string())
@@ -230,12 +243,11 @@ class Evaluator(object):
                 time.sleep(NON_CRITICAL_WAIT)
                 continue
 
-            samples = self._convert_results(results, config)
-
-            # cost values cannot be NaN or infinity because this breaks the GP
-            invalid_cost = any(np.isnan(s.cost) or np.isinf(s.cost) for s in samples)
-            if invalid_cost:
-                self.log('invalid cost for one of the samples: {}'.format(samples))
+            try:
+                samples = self._convert_results(results, config)
+            except ValueError:
+                self.log('exception when converting results\n' + exception_string())
+                time.sleep(NON_CRITICAL_WAIT)
                 continue
 
             return samples

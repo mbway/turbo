@@ -36,6 +36,12 @@ finally:
     dg.stop() # or force closed
 ```
 
+- can replace logging to print to the console immediately
+```
+def log(self, s):
+    print(s, flush=True)
+```
+
 '''
 # python 2 compatibility
 from __future__ import (absolute_import, division, print_function, unicode_literals)
@@ -86,7 +92,7 @@ op.core.NON_CRITICAL_WAIT = 0.5
 #
 # NOTE: THESE ARE NOT GOOD VALUES for real world situations, they are chosen to
 # train quickly. See one of the Jupyter notebooks for realistic parameters.
-TEST_GP_PARAMS = {
+TEST_SURROGATE = op.SciKitGPSurrogate.Custom(gp_params={
     'alpha':1e-5, # more noise than the default
     'kernel': gp.kernels.ConstantKernel(1.0, constant_value_bounds='fixed') * \
               gp.kernels.RBF(length_scale=1.0, length_scale_bounds='fixed'),
@@ -94,7 +100,7 @@ TEST_GP_PARAMS = {
     'optimizer' : None,
     'normalize_y':True,
     'copy_X_train':True
-}
+})
 TEST_MAXIMISATION = {
     'num_random' : 500,
     'num_grad_restarts' : 5,
@@ -784,8 +790,11 @@ class TestOptimiser(NumpyCompatableTestCase):
         ranges = {'a':[1,2], 'b':[3,4]}
         class TestEvaluator(op.Evaluator):
             def test_config(self, config):
-                new_config = config.copy()
-                new_config.abc = 123
+                new_config = op.dotdict()
+                # the evaluator is allowed to modify existing parameters, but
+                # not add new ones or remove any.
+                new_config.a = config.a + 1
+                new_config.b = config.b + 1
                 return [op.Sample(config, config.a), op.Sample(new_config, 10)]
 
         optimiser = op.GridSearchOptimiser(ranges, maximise_cost=False, order=['a','b'])
@@ -797,21 +806,46 @@ class TestOptimiser(NumpyCompatableTestCase):
         no_exceptions(self, evaluator)
 
         def to_samples(l):
-            samples = [op.Sample({'a':a, 'b':b, 'abc':abc}, cost, job_ID=job_ID)
-                       for a, b, abc, cost, job_ID in l]
-            for s in samples:
-                if s.config['abc'] is None:
-                    del s.config['abc']
-            return samples
+            return [op.Sample({'a':a, 'b':b}, cost, job_ID=job_ID)
+                       for a, b, cost, job_ID in l]
         samples = to_samples([
-            (1,3,None,1,1), (1,3,123,10,1),
-            (2,3,None,2,2), (2,3,123,10,2),
-            (1,4,None,1,3), (1,4,123,10,3),
-            (2,4,None,2,4), (2,4,123,10,4)
+            (1,3,1,1), (2,4,10,1),
+            (2,3,2,2), (3,4,10,2),
+            (1,4,1,3), (2,5,10,3),
+            (2,4,2,4), (3,5,10,4)
         ])
 
         self.assertEqual(optimiser.samples, samples)
-        self.assertIn(optimiser.best_sample(), to_samples([(1,3,None,1,1), (1,4,None,1,2)])) # either would be acceptable
+        self.assertIn(optimiser.best_sample(), to_samples([(1,3,1,1), (1,4,1,2)])) # either would be acceptable
+
+    def test_evaluator_change_config(self):
+        '''
+        The evaluator is _not_ allowed to add new entries to the given config
+        when returning the results.
+        '''
+        ranges = {'a':[1,2], 'b':[3,4]}
+        class TestEvaluator(op.Evaluator):
+            def __init__(self):
+                super().__init__()
+                self.flag = False
+            def test_config(self, config):
+                if self.flag:
+                    return 2
+                else:
+                    # only modify the config once so the evaluator doesn't
+                    # deadlock trying to return valid results
+                    config.abc = 123
+                    self.flag = True
+                    return op.Sample(config, cost=1)
+
+        optimiser = op.GridSearchOptimiser(ranges, maximise_cost=False, order=['a','b'])
+        evaluator = TestEvaluator()
+
+        optimiser.run_sequential(evaluator, max_jobs=1)
+
+        no_exceptions(self, optimiser)
+        self.assertTrue('ValueError' in evaluator.log_record)
+
 
     def test_evaluator_extra(self):
         ranges = {'a':[1,2], 'b':[3,4]}
@@ -904,9 +938,6 @@ def get_dict(optimiser, different_run=False):
             # ignore hypothesised samples for jobs that have finished since they
             # will be removed at the next possible opportunity anyway
             d['outstanding_steps'] = [s for s in d['outstanding_steps'] if s[0] not in optimiser.finished_job_ids]
-        if 'step_log' in d:
-            # Gaussian Processes cannot be compared
-            d['step_log'] = {job_ID: {k:v for k, v in step if k != 'gp'} for job_ID, step in d['step_log'].items()}
         return d
 
 class reset_random:
@@ -1048,13 +1079,13 @@ class TestCheckpoints(NumpyCompatableTestCase):
 
         optimiser = op.BayesianOptimisationOptimiser(
             ranges, maximise_cost=False, acquisition_strategy=TEST_ACQ,
-            gp_params=TEST_GP_PARAMS, maximisation_args=TEST_MAXIMISATION)
+            Surrogate=TEST_SURROGATE, maximisation_args=TEST_MAXIMISATION)
         evaluator = TestEvaluator()
         def create_optimiser():
             ''' create a 'dirty' optimiser which is initialised identically but has been run '''
             opt = op.BayesianOptimisationOptimiser(
                 ranges, maximise_cost=False, acquisition_strategy=TEST_ACQ,
-                gp_params=TEST_GP_PARAMS, maximisation_args=TEST_MAXIMISATION)
+                Surrogate=TEST_SURROGATE, maximisation_args=TEST_MAXIMISATION)
             # have to at least run a few Bayesian steps (ie max_jobs > pre_phase_steps)
             opt.run_sequential(evaluator, max_jobs=random.randint(3, 5))
             return opt
@@ -1193,7 +1224,7 @@ class TestCheckpoints(NumpyCompatableTestCase):
 
         create_optimiser = lambda: op.BayesianOptimisationOptimiser(
             ranges, maximise_cost=False, acquisition_strategy=TEST_ACQ,
-            gp_params=TEST_GP_PARAMS, maximisation_args=TEST_MAXIMISATION)
+            Surrogate=TEST_SURROGATE, maximisation_args=TEST_MAXIMISATION)
         evaluators = [TestEvaluator(), TestEvaluator(), TestEvaluator()]
         sort_samples = lambda samples: sorted(samples, key=lambda s:(s.config.a, s.config.b))
 
@@ -1410,7 +1441,7 @@ class TestBayesianOptimisation(NumpyCompatableTestCase):
         )
         optimiser = op.BayesianOptimisationOptimiser(
             ranges, maximise_cost=False, acquisition_strategy=strategy,
-            gp_params=TEST_GP_PARAMS, maximisation_args=TEST_MAXIMISATION)
+            Surrogate=TEST_SURROGATE, maximisation_args=TEST_MAXIMISATION)
         evaluator = TestEvaluator()
 
         self.assertEqual(optimiser.best_sample(), None)
@@ -1434,7 +1465,7 @@ class TestBayesianOptimisation(NumpyCompatableTestCase):
 
         optimiser = op.BayesianOptimisationOptimiser(
             ranges, maximise_cost=True, acquisition_strategy=TEST_ACQ,
-            gp_params=TEST_GP_PARAMS, maximisation_args=TEST_MAXIMISATION)
+            Surrogate=TEST_SURROGATE, maximisation_args=TEST_MAXIMISATION)
         evaluator = TestEvaluator()
 
         self.assertEqual(optimiser.best_sample(), None)

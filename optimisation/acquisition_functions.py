@@ -9,7 +9,6 @@ from .py2 import *
 import numpy as np
 from math import isinf
 
-import sklearn.gaussian_process as gp
 from scipy.stats import norm # Gaussian/normal distribution
 
 # local modules
@@ -18,10 +17,10 @@ from .utils import *
 #TODO: test that negating the function and minimising is the negative of the acquisition
 #TODO: gradients for acquisition functions, incorporate in the maximisation process, get_acq_fun can return the value and the derivative, or None if not supported
 
-def thompson_sample(xs, gp_model):
+def thompson_sample(xs, sur):
     raise NotImplementedError()
 
-def probability_of_improvement(xs, gp_model, maximise_cost, best_cost, xi):
+def probability_of_improvement(xs, sur, maximise_cost, best_cost, xi):
     r'''
     This acquisition function is similar to EI
 
@@ -42,7 +41,7 @@ def probability_of_improvement(xs, gp_model, maximise_cost, best_cost, xi):
     general form based on: https://apsis.readthedocs.io/en/latest/tutorials/usage/optimization.html
 
     '''
-    mus, sigmas = gp_model.predict(xs, return_std=True)
+    mus, sigmas = sur.predict(xs, std_dev=True)
     # using masks is slightly faster than ignoring the division by zero errors
     # then fixing later. It also seems like a 'cleaner' approach.
     mask = sigmas != 0 # sigma_x = 0  =>  PI(x) = 0
@@ -59,10 +58,10 @@ def probability_of_improvement(xs, gp_model, maximise_cost, best_cost, xi):
 
     return Zs
 
-def expected_improvement(xs, gp_model, maximise_cost, best_cost, xi):
+def expected_improvement(xs, sur, maximise_cost, best_cost, xi):
     r''' expected improvement acquisition function
     xs: array of points to evaluate the GP at. shape=(num_points, num_attribs)
-    gp_model: the GP fitted to the past configurations
+    sur: the surrogate model fitted to the past configurations
     maximise_cost: True => higher cost is better, False => lower cost is better
     best_cost: the true cost of the best known concrete sample (either smallest
         or largest depending on maximise_cost)
@@ -102,7 +101,7 @@ def expected_improvement(xs, gp_model, maximise_cost, best_cost, xi):
     0 & \text{if }\sigma(\mathbf x) = 0
     \end{cases}$$
     '''
-    mus, sigmas = gp_model.predict(xs, return_std=True)
+    mus, sigmas = sur.predict(xs, std_dev=True)
     # using masks is slightly faster than ignoring the division by zero errors
     # then fixing later. It also seems like a 'cleaner' approach.
     mask = sigmas != 0 # sigma_x = 0  =>  EI(x) = 0
@@ -123,7 +122,7 @@ def expected_improvement(xs, gp_model, maximise_cost, best_cost, xi):
 # upper-confidence bound is also used even when minimising because 'UCB is ingrained in the literature as a standard form' (https://www.cse.wustl.edu/~garnett/cse515t/spring_2015/files/lecture_notes/12.pdf)
 # whether LCB has a negative around the whole thing: https://github.com/automl/RoBO/blob/master/robo/acquisition_functions/lcb.py
 # I think that technically LCB should not be negated, however in order to make it into an acquisition function (ie to be maximised) it should be negated
-def confidence_bound(xs, gp_model, maximise_cost, kappa):
+def confidence_bound(xs, sur, maximise_cost, kappa):
     r'''
     upper confidence bound when maximising, (negative) lower confidence bound when minimising
     $$\begin{align*}
@@ -132,7 +131,7 @@ def confidence_bound(xs, gp_model, maximise_cost, kappa):
     \end{align*}$$
 
     xs: array of points to evaluate the GP at. shape=(num_points, num_attribs)
-    gp_model: the GP fitted to the past configurations
+    sur: the surrogate model fitted to the past configurations
     maximise_cost: True => higher cost is better, False => lower cost is better
     kappa: parameter which controls the trade-off between exploration and
         exploitation. Larger values favour exploration more. (geometrically,
@@ -143,7 +142,7 @@ def confidence_bound(xs, gp_model, maximise_cost, kappa):
         kappa=inf => pure exploration, taking only the variance into account
         (also not very useful)
     '''
-    mus, sigmas = gp_model.predict(xs, return_std=True)
+    mus, sigmas = sur.predict(xs, std_dev=True)
     sigmas = make2D(sigmas)
     if isinf(kappa):
         return sigmas # pure exploration

@@ -41,6 +41,8 @@
 xs = [s.gp.kernel_.k2.noise_level for n, s in optimiser.step_log.items()]
 plt.plot(xs)
 ```
+- Bayesian optimisation likes to test points around the edges, which can be problematic. For example testing out a neural network with max width, max depth and max epochs is not a good idea. Using an acquisition function which takes the evaluation time into account may help prevent this.
+- one major problem is when the surrogate function explains the data as being complete noise with a straight line mean. This is problematic because there is typically a slight gradient in the mean prediction line which results in a 'corner' of the configuration space to be sampled repeatedly. Usually after taking more samples the GP once again fits the data. Increasing the number of GP optimizer restarts helps. Unsurprisingly, the quality of the surrogate model dramatically changes the performance of the algorithm because it relies on the surrogate being accurate in order to make informed decisions. If the surrogate is misleading then Bayesian optimisation is useless (probably worse than random).
 
 # Things I learned about networking
 - it is so much better to extract all the networking logic and abstract it when interacting with the rest of the program logic. It makes it much easier to analyse the behaviour of the protocol by reducing the number of possible execution paths

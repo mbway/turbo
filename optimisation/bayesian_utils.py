@@ -8,46 +8,12 @@ from .py2 import *
 
 import numpy as np
 
-import sklearn.gaussian_process as gp
 import scipy.optimize
 
 # local modules
 from .utils import *
 
 
-
-#TODO: test
-def store_GP(gp_model):
-    '''
-    store the current parameters of the given Gaussian process for efficient
-    storage. The GP must have been fitted to some data set before storing.
-
-    The restored GP will be identical to the original if restored with the same
-    gp_params and data set. The GP can also be restored with a different data
-    set, which has the effect of transferring the hyperparameters without
-    re-optimising them for the new data set.
-    '''
-    return np.copy(gp_model.kernel_.theta)
-
-def restore_GP(stored_params, gp_params, xs, ys):
-    '''
-    restore a stored GP by constructing a new GP with the same parameters and data set
-    stored_params: the result of calling store_GP
-    gp_params: the parameters that the original GP was initialised with
-    xs, ys: the data set that the original GP was trained on
-    returns: a new GP which is identical to the original GP
-    '''
-    stored_params = np.array(stored_params)
-    gp_model = gp.GaussianProcessRegressor(**gp_params)
-    p = gp_model.get_params()
-    kernel = p['kernel']
-    opt = p['optimizer']
-    gp_model.set_params(optimizer=None)
-    # don't want to modify the kernel which is part of gp_params, so modify a clone
-    gp_model.set_params(kernel=kernel.clone_with_theta(stored_params))
-    gp_model.fit(xs, ys)
-    gp_model.set_params(kernel=kernel, optimizer=opt)
-    return gp_model
 
 #TODO: test
 def maximise_function(f, bounds, gen_random, num_random, num_grad_restarts, take_best_random):
@@ -177,7 +143,8 @@ class Step(DataHolder):
         function.
 
         hy: estimated cost values for the hypothesised configurations: hx
-        gp: a stored GP trained on a data set of concrete samples + hypothesised samples
+        sur: surrogate model hyperparameters trained on a data set of concrete
+            samples + hypothesised samples
         x: the suggested configuration (= argmax_x acquisition_function(x))
         ac: the value of the acquisition function evaluated at x (should be the maximum)
 
@@ -186,7 +153,7 @@ class Step(DataHolder):
             function has a random element. Currently this is only the case with
             Thompson Sampling).
         '''
-        __slots__ = ('hy', 'gp', 'x', 'ac', 'ac_random_state')
+        __slots__ = ('hy', 'sur', 'x', 'ac', 'ac_random_state')
         __defaults__ = {'ac_random_state' : None}
 
     class MC_MaxAcqSuggestion(DataHolder):
@@ -195,15 +162,16 @@ class Step(DataHolder):
         for hypothesised samples if there are any, then maximising the average
         acquisition function value across each Monte-Carlo simulation.
 
-        gp: a stored GP trained on a data set of only the concrete samples
-        simulations: [hy, sim_gp] or [hy, sim_gp, ac_random_state]
+        sur: surrogate model hyperparameters trained on a data set of only the
+            concrete samples
+        simulations: [hy, sur] or [hy, sur, ac_random_state]
             each simulation has different values for hy
             hy: estimated cost values sampled from the posterior of the GP
                 trained on only concrete samples
-            sim_gp: a stored GP trained on a data set consisting of
-                concrete_samples + hypothesised samples for this simulation.
-                None if the suggestion gp hyperparameters are used (for faster
-                computation).
+            sur: surrogate model hyperparameters trained on a data set
+                consisting of concrete_samples + hypothesised samples for this
+                simulation. None if the suggestion hyperparameters are used
+                (for faster computation).
             ac_random_state: the state of the RNG when the acquisition function
                 was evaluated (only used when the acquisition function has a
                 random element. Currently this is only the case with Thompson
@@ -213,7 +181,7 @@ class Step(DataHolder):
             evaluated as x (should be the maximum)
 
         '''
-        __slots__ = ('gp', 'simulations', 'x', 'ac')
+        __slots__ = ('sur', 'simulations', 'x', 'ac')
 
 
 #TODO: choose whether to sample log ranges logarithmically or ignore
