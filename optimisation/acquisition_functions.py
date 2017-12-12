@@ -48,8 +48,10 @@ def probability_of_improvement(xs, sur, maximise_cost, best_cost, xi):
     sigmas = make2D(sigmas[mask])
 
     sf = 1 if maximise_cost else -1     # scaling factor
-    # maximisation: mu(x) - f(x+) - xi
-    # minimisation: f(x+) - mu(x) - xi
+    # maximisation:
+    #     mu(x) - (f(x+) + xi)     =  mu(x) - f(x+) - xi
+    # minimisation:
+    #     -(mu(x) - (f(x+) - xi))  =  f(x+) - mu(x) - xi
     diff = sf * (mus[mask] - best_cost) - xi
 
     Zs = np.zeros_like(mus)

@@ -20,6 +20,9 @@
 # Tips for tuning hyper-parameters
 - first list out the hyperparameters to tune and potentially rule out the ones that will be kept fixed (eg like the layer activation functions)
 
+# Things I learned about Gaussian processes
+- they are not translation invariant. The prior assumes a mean of 0, so this dictates how the function will tend when extrapolating. Take a small data set and add a constant to the y and observe how the GP prediction changes.
+
 # Things I learned about Bayesian optimisation
 - care has to be taken regarding the surrogate function or the results could be worse than random
 - Gaussian processes are harder to fit to data than expected
@@ -34,6 +37,10 @@
 - discrete parameters can be simulated by rounding the given continuous value.
 - Bayesian optimisation can handle pretty well with a noisy objective function, the GP will smooth out the surrogate function allowing good samples to still be chosen.
 - unfortunately, different objective functions can be fitted by different GP kernels, however without knowing the true function it is hard to determine the correct kernel to use.
+
+# Things I learned about GPs
+- standardizing the data (ie subtract mean, divide by variance) is _essential_. I failed to fit a GP when I had a dataset which was fairly reasonable and I gave the GP many samples to fit to with many optimiser repeats and I also narrowed the boundary on the kernel hyperparameters to prevent testing obviously bad values and to speed up the optimisation (which I think it did).
+    - I was getting nowhere, then the first try after standardizing the data and the GP produced reasonable results
 - when the GP does not fit at all and describes the variation in the data as being completely noise, this may indicate that more restarts of the GP optimiser is required
 - if you know what the surrogate function should look like then you can set the surrogate GP parameters to fixed values (eg the length scale should be the average distance between the points)
 - restrict the bounds of the WhiteKernel used for the surrogate GP to prevent it from explaining all variation as noise. May be useful to plot the noise levels throughout the optimisation to get an idea for what maximum noise level might be appropriate for the function. As a Heuristic: when normally distributed noise sigma=0.3 is added, a maximum noise level of 0.15 seems reasonable (according to one of the tested functions).

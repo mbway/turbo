@@ -1,3 +1,9 @@
+# BUGS #
+- if test_config isn't defined then the optimiser hangs instead of reporting that the method is missing
+
+
+# TODO #
+
 to get ground truth with GP:
 - make several green lines (functions to fit) with several different data sets
   with chunks removed

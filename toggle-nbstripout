@@ -13,8 +13,7 @@ elif [ "$1" == "disable" ]; then
     sed -i '/nbstripout/ s/^#*/#/' "$ATTR"
 else
     echo "usage: toggle-nbstripout (enable|disable)"
-    exit 1
 fi
 
-echo "attribute file \"$ATTR\":"
+echo "current state of attribute file \"$ATTR\":"
 cat "$ATTR"

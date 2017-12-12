@@ -23,6 +23,7 @@ TODO
 - https://github.com/scikit-optimize/scikit-optimize
 - https://hyperopt.github.io/hyperopt/
 - https://github.com/automl/RoBO
+- https://github.com/resibots/limbo
 
 
 # Contents (in chronological order) #
