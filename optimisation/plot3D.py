@@ -53,7 +53,7 @@ def surface3D(x, y, z, tooltips=None, axes_names=['x','y','z'], log_axes=(False,
     # show_link is a link to export to the 'plotly cloud'
     ply.iplot(fig, show_link=False)
 
-def scatter3D(x,y,z, interactive=False, color_by='z', markersize=5, tooltips=None, axes_names=['x','y','z'], log_axes=(False,False,False)):
+def scatter3D(x,y,z, interactive=False, color_by='z', markersize=2, tooltips=None, axes_names=['x','y','z'], log_axes=(False,False,False)):
     '''
     interactive: whether to display an interactive slider to choose how many points to display
     color_by: can be one of: 'z', 'age'

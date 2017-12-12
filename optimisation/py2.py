@@ -17,6 +17,14 @@ def my_fun():
 note: this only affects list comprehensions, not the other comprehensions. To
 fix, search for the comprehensions and rename the variables to be different to
 any variables in the local scope.
+- when a string is created in Jupyter (or a regular python script by a user)
+  without importing from future, the old string type may not match the string
+  type used internally, so a check in the optimisation code for
+  isinstance(val, str) will fail because str != newstr. If future is imported
+  but not builtins then instead the string may be of type unicode != newstr. To
+  combat this I will not test isinstance directly, but use is_string, defined
+  separately for python2 (except for where if not isinstance(val, str): val =
+  str(val)) because I would rather the value gets converted.
 
 Searching in Vim: (yank the line then `/` then C-r-" to paste)
 \[\_.\{-}\]
@@ -33,9 +41,16 @@ import sys
 PY_VERSION = sys.version_info[0] # major python version
 
 if PY_VERSION == 3:
+    old_str = str # so that old_str is defined regardless of the python version
     from math import inf, isclose
 
+    def is_string(s):
+        ''' also includes bytes since many string operations are also supported on bytes '''
+        return isinstance(s, (str, bytes))
+
 elif PY_VERSION == 2:
+    old_str = str
+
     # make python 2 behave more like python 3
     from builtins import *
 
@@ -56,6 +71,9 @@ elif PY_VERSION == 2:
         print_(*args, **kwargs)
         if flush:
             kwargs.get('file', sys.stdout).flush()
+
+    def is_string(s):
+        return isinstance(s, (str, basestring, old_str, unicode))
 else:
     # if a new python version is released, the logic for choosing between python
     # 2 and 3 has to be changed on a case-by-case basis.

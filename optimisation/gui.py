@@ -64,7 +64,8 @@ if in_jupyter():
     print('Setting up GUI for Jupyter')
     # hide scroll bars that sometimes appear (by chance) because the image fills
     # the entire sub-area
-    display(HTML('''<style>div.output_subarea.output_png{overflow:hidden;}</style>'''))
+    display(HTML('<style>div.output_subarea.output_png{'
+                 'overflow:hidden;width:100%;max-width:100%}</style>'))
 
 def pyqt_pdb():
     qtc.pyqtRemoveInputHook()
@@ -514,7 +515,7 @@ class LogMonitor:
         self.loggable = loggable
         if LogMonitor.counter > 0:
             f += str(LogMonitor.counter)
-        self.f = open(f, 'w') if isinstance(f, str) else f
+        self.f = open(f, 'w') if is_string(f) else f
         LogMonitor.counter += 1
     def listen_async(self):
         t = threading.Thread(target=self.listen, name='LogMonitor')
@@ -605,7 +606,7 @@ def optimiser_progress_bar(optimiser, close_when_complete=False):
 
         label = widgets.HTML()
         bar = widgets.IntProgress(min=0, max=optimiser.run_state.max_jobs,
-                                  value=0, description='', width='100%',
+                                  value=0, description='', layout=widgets.Layout(width='100%'),
                                   bar_style='info')
         box = widgets.VBox(children=[label, bar])
         display(box)
@@ -765,7 +766,7 @@ def list_slider(list_, function, slider_name='Item N: '):
     slider_name: the description/label to apply to the slider
     '''
     slider = widgets.IntSlider(value=len(list_), min=1, max=len(list_),
-                               continuous_update=False, width='100%')
+                               continuous_update=False, layout=widgets.Layout(width='100%'))
     slider.description = slider_name
     widgets.interact(lambda val: function(list_[val-1]), val=slider)
     return slider

@@ -25,7 +25,7 @@ from .utils import *
 
 #TODO: tests
 
-class Surrogate:
+class Surrogate(object):
     '''
     A wrapper around specific models or libraries suitable for being used as a
     surrogate model for Bayesian optimisation.
@@ -91,6 +91,7 @@ class SciKitGPSurrogate(Surrogate):
                 n_restarts_optimizer = 10,
                 # make the mean 0 (theoretically a bad thing, see docs, but can help)
                 # with the constant offset in the kernel this shouldn't be required
+                # this may be a dangerous option, seems to make worse predictions
                 #normalize_y = True,
                 copy_X_train = True # whether to make a copy of the training data (in-case it is modified)
             )

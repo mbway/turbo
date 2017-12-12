@@ -198,7 +198,7 @@ def config_string(config, order=None, precise=False):
     else:
         string = '{'
         for p in order:
-            if isinstance(config[p], (str, np.str_)):
+            if is_string(config[p]) or isinstance(config[p], np.str_):
                 string += '{}="{}", '.format(p, config[p])
             else: # assuming numeric
                 if precise:

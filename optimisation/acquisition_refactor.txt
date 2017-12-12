@@ -1,0 +1,17 @@
+
+TODO
+- acquisition function
+    - TS
+- acquisition function gradients
+- acquisition function parameters
+    - constant
+    - as a function of time
+- dealing with GP hyperparameters by for all but TS)
+    - the ML optimised hyperparameters (point estimate)
+    - MCMC of N samples for plausible hyperparameters to form a Monte-carlo
+      estimate of the integrated acquisition function
+    - pybo creates 'meta' surrogate models for using MCMC. Could treat them as completely separate surrogates which, when asked to predict, does the averaging transparently to the bayesian optimisation algorithm. May not even need special treatment when plotting
+- treatment of hypothesised samples
+    - use mean prediction
+    - MCMC of N posterior sample predictions
+

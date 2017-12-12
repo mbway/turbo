@@ -7,6 +7,7 @@ definitions because these methods are long and just add noise)
 from __future__ import (absolute_import, division, print_function, unicode_literals)
 from .py2 import *
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import matplotlib.ticker as ticker
@@ -21,6 +22,54 @@ from .bayesian_utils import *
 from . import plot3D
 
 # note: Mixins have to be inherited in reverse, eg MyClass(Plotting, SuperClass)
+
+class Norm(mpl.colors.Normalize):
+    '''
+    Useful to warp the colormap so that more of the available colors are
+    used on the range of interesting data.
+    '''
+    # need to implement __call__() and optionally levels()
+
+    def levels(self):
+        '''
+        returns: a numpy array for the values where the boundaries between
+            the colors should be placed
+        '''
+        return None
+
+class MidpointNorm(Norm):
+    '''
+    Half of the color map is used for values which fall below the midpoint,
+    and half are used for values which fall above.
+    This can be used to draw attention to smaller differences at the extreme
+    ends of the observed values.
+
+    based on:
+        - http://scikit-learn.org/stable/auto_examples/svm/plot_rbf_parameters.html
+        - https://matplotlib.org/users/colormapnorms.html
+    '''
+    def __init__(self, vmin, vmax, midpoint, res=100, clip=False):
+        '''
+        midpoint: the value to 'center' around
+        res: the 'resolution' ie number of distinct levels in the colorbar
+        '''
+        super().__init__(vmin, vmax, clip)
+        self.midpoint = midpoint
+        self.res = res
+
+    def __call__(self, value, clip=None):
+        x, y = [self.vmin, self.midpoint, self.vmax], [0, 0.5, 1]
+        return np.ma.masked_array(np.interp(value, x, y))
+
+    def levels(self):
+        return np.concatenate((
+            np.linspace(self.vmin, self.midpoint, num=self.res/2, endpoint=False),
+            np.linspace(self.midpoint, self.vmax, num=self.res/2)))
+
+
+
+
+
 
 class OptimiserPlotting:
     '''
@@ -49,6 +98,36 @@ class OptimiserPlotting:
         for val, samples in groupby(sorted(self.samples, key=params_key), params_key):
             data.append((val, list(samples)))
         return data
+
+    def plot_error_over_time(self, true_best, log_scale=True):
+        '''
+        plot a line graph showing the difference between the known optimal value
+        and the optimiser's best guess at each step.
+        true_best: the globally optimal value to compare to
+        log_scale: whether to plot on a logarithmic or a linear scale
+        '''
+        fig, ax = plt.subplots(figsize=(16, 10)) # inches
+
+        xs = range(1, len(self.samples)+1)
+        costs = [(true_cost - s.cost if self.maximise_cost
+                  else s.cost - true_best) for s in self.samples]
+
+        ax.plot(xs, costs, marker='o', markersize=4, color='#4c72b0', label='error')
+
+        ax.set_title('Error Over Time', fontsize=14)
+        ax.set_xlabel('samples')
+        ax.set_ylabel('cost')
+
+        if log_scale:
+            ax.set_yscale('log')
+
+        ax.margins(0.0, 0.15)
+        if len(self.samples) < 50:
+            ax.xaxis.set_major_locator(ticker.MultipleLocator(2.0))
+        elif len(self.samples) < 100:
+            ax.xaxis.set_major_locator(ticker.MultipleLocator(5.0))
+        ax.legend()
+
 
     def plot_cost_over_time(self, plot_each=True, plot_best=True, true_best=None):
         '''
@@ -304,7 +383,7 @@ class BayesianOptimisationOptimiserPlotting:
 
             # restore from just the hyperparameters to a surrogate model which can be queried
             sur = self.Surrogate(self)
-            sur.fit(xs, ys, hyper_params=sg1.sur)
+            sur.fit(s.sx, s.sy, hyper_params=sg1.sur) # only concrete samples
 
             sims = True # simulations used in this strategy
             sim_surs = []
@@ -379,7 +458,7 @@ class BayesianOptimisationOptimiserPlotting:
 
             if sims:
                 sim_ac = [acq(ps_perturbed_points) for acq in sim_ac_funs]
-                sim_mus = [sur.predict(ps_perturbed_points).flatten() for sur in sim_surs]
+                sim_mus = [sim_sur.predict(ps_perturbed_points).flatten() for sim_sur in sim_surs]
 
         fig = plt.figure(figsize=(16, 10)) # inches
         grid = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=[2, 1])
@@ -507,7 +586,7 @@ class BayesianOptimisationOptimiserPlotting:
 
 
     def plot_step_2D(self, x_param, y_param, step, true_cost=None,
-                     plot_through='next', force_view_linear=False):
+                     plot_through='next', force_view_linear=False, mu_norm=None):
         '''
         x_param: the name of the parameter to place along the x axis
         y_param: the name of the parameter to place along the y axis
@@ -523,6 +602,9 @@ class BayesianOptimisationOptimiserPlotting:
             current step. a configuration dict can also be passed
         force_view_linear: force the images to be displayed with linear axes
             even if the parameters are logarithmic
+        mu_norm: a BayesianOptimisationOptimiserPlotting.Norm object
+            Useful to warp the colormap so that more of the available colors are
+            used on the range of interesting data.
         '''
         assert step in self.step_log, 'step not recorded in the log'
 
@@ -602,7 +684,7 @@ class BayesianOptimisationOptimiserPlotting:
 
             # restore from just the hyperparameters to a surrogate model which can be queried
             sur = self.Surrogate(self)
-            sur.fit(xs, ys, hyper_params=sg1.sur)
+            sur.fit(s.sx, s.sy, hyper_params=sg1.sur) # only concrete samples
 
             sims = True # simulations used in this strategy
             sim_surs = []
@@ -735,16 +817,17 @@ class BayesianOptimisationOptimiserPlotting:
 
         fig.suptitle(title, fontsize=20)
 
-        def plot_heatmap(ax, data, colorbar, cmap):
+        def plot_heatmap(ax, data, colorbar, cmap, norm=None):
             # pcolormesh is better than imshow because: no need to fiddle around
             # with extents and aspect ratios because the x and y values can be
             # fed in and so just works. This also prevents the problem of the
             # origin being in the wrong place. It is compatible with log scaled
             # axes unlike imshow. There is no interpolation by default unlike
             # imshow.
-            im = ax.pcolormesh(all_xs, all_ys, data, cmap=cmap)
+            im = ax.pcolormesh(all_xs, all_ys, data, cmap=cmap, norm=norm)
             if colorbar:
-                c = fig.colorbar(im, ax=ax, pad=0.01, fraction=0.051)
+                levels = norm.levels() if norm is not None else None
+                c = fig.colorbar(im, ax=ax, pad=0.01, fraction=0.051, boundaries=levels)
                 c.set_label('cost')
             ax.set_xlabel('parameter {}'.format(x_param))
             ax.set_ylabel('parameter {}'.format(y_param))
@@ -767,7 +850,7 @@ class BayesianOptimisationOptimiserPlotting:
         cmap_match_direction = cmap if self.maximise_cost else cmap + '_r' # reversed
 
         ax1.set_title('Surrogate $\\mu$', fontsize=title_size)
-        im = plot_heatmap(ax1, mus, colorbar=True, cmap=cmap_match_direction)
+        im = plot_heatmap(ax1, mus, colorbar=True, cmap=cmap_match_direction, norm=mu_norm)
 
         ax3.set_title('Surrogate $\\sigma$', fontsize=title_size)
         plot_heatmap(ax3, sigmas, colorbar=True, cmap=cmap)

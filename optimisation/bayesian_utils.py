@@ -14,8 +14,10 @@ import scipy.optimize
 from .utils import *
 
 
+#TODO: CMA-ES
 
 #TODO: test
+#TODO: should be a module passed to the optimiser
 def maximise_function(f, bounds, gen_random, num_random, num_grad_restarts, take_best_random):
     '''
     f: the function to maximise, takes an ndarray of shape=(num_points, num_attribs)
@@ -65,7 +67,7 @@ def maximise_function(f, bounds, gen_random, num_random, num_grad_restarts, take
         else:
             starting_points = gen_random(num_grad_restarts)
 
-        for j in range(num_grad_restarts):
+        def bfgs(j):
             starting_point = make2D_row(starting_points[j])
             # the minimiser passes x as (num_attribs,) but f wants (1,num_attribs)
             neg_f = lambda x: -f(make2D_row(x))
@@ -83,11 +85,18 @@ def maximise_function(f, bounds, gen_random, num_random, num_grad_restarts, take
             if not result.success:
                 warnings.warn('restart {}/{} of gradient-based optimisation failed'.format(
                     j, num_grad_restarts))
-                continue
+                return None, None
+            return result.x, result.fun
 
-            if result.fun < best_y:
-                best_x = result.x   # shape=(num_attribs,)
-                best_y = result.fun # shape=(1,1)
+        # @Performance: I was going to parallelise this, but it has reasonable
+        # performance. Between 0.1s and 4s in my testing and although it does
+        # increase as the optimisation progresses, the trend appears to be
+        # sub-linear.
+        for j in range(num_grad_restarts):
+            res_x, res_y = bfgs(j)
+            if res_y is not None and res_y < best_y:
+                best_x = res_x # shape=(num_attribs,)
+                best_y = res_y # shape=(1,1)
 
     if best_x is None:
         return None, -inf

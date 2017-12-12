@@ -142,7 +142,7 @@ class AcquisitionStrategy(object):
                     ('cb', 'ucb', 'lcb', 'confidence bound',
                      'upper confidence bound', 'lower confidence bound'),
                     {'kappa' : 2.0},
-                    lambda args,keys: keys <= {'kappa'}),
+                    lambda args,keys: keys <= {'kappa', 'beta_t'}),
             ],
             # do not allow custom acquisition functions, instead custom
             # functions should be implemented alongside the existing ones and
@@ -230,19 +230,20 @@ class AcquisitionStrategy(object):
         else:
             val, args = t, {}
 
-        if isinstance(val, str): # perform string comparisons in lower case
+        if is_string(val): # perform string comparisons in lower case
             val = val.lower()
 
         found = False
         for canonical, other, default_args, check_args in allowed_values:
             if val == canonical or val in other:
                 val = canonical
+                #TODO: doesn't work for UCB because only one of 'kappa' and 'beta_t' should be set
                 args = dict(default_args, **args) # overlay over defaults
                 arg_keys = set(args.keys())
                 assert check_args(args, arg_keys), 'arguments invalid: {} {}'.format(val, args)
                 return val, args
 
-        if no_match_check(val, args, keys):
+        if no_match_check(val, args, set(args.keys())):
             return val, args
         else:
             raise ValueError('invalid value: {}'.format(t))
@@ -300,7 +301,7 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
       data, and the acquisition function also relies on real-number calculations.
       Modifications to the algorithm may allow for discrete valued parameters however.
     '''
-
+    #TODO: rename maximise_cost to maximise_objective
     def __init__(self, ranges, maximise_cost, acquisition_strategy,
                  Surrogate=None, maximisation_args=None, close_tolerance=1e-5):
         '''
@@ -513,9 +514,11 @@ class BayesianOptimisationOptimiser(BayesianOptimisationOptimiserPlotting, Optim
 
         elif acq == ac_funs.confidence_bound:
             if 'beta_t' in acq_params:
-                raise NotImplementedError()
-                # t = job_ID?
-                acq_params = {'kappa' : 123}
+                #TODO: this feels dirty. Should make the whole approach cleaner
+                # @HACK: job_ID maybe isn't the best value to use for t
+                t = self.num_started_jobs-self.strategy.pre_phase_steps
+                acq_params = {'kappa' : acq_params['beta_t'](t)}
+                #print('beta_t({})={}'.format(t, acq_params['kappa']))
             return lambda xs: acq(xs, sur, self.maximise_cost, **acq_params)
 
         else:
