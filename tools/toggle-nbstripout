@@ -5,7 +5,7 @@
 # only run for lines which match /nbstripout/
 # replace ^#* with either nothing (to enable) or a single #
 
-ATTR=.git/info/attributes
+ATTR=../.git/info/attributes
 
 if [ "$1" == "enable" ]; then
     sed -i '/nbstripout/ s/^#*//' "$ATTR"
