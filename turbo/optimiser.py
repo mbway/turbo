@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
+''' The Bayesian Optimisation specific code
 '''
-The Bayesian Optimisation specific code
-'''
-
-import interfaces.initialisation
 
 class OptimiserRuntime:
     __slots__ = (
@@ -45,11 +42,18 @@ class Optimiser:
 
     def _check_settings(self):
         ''' check that the current optimiser settings make sense
-        Raises: AssertionError
+
+        Raises:
+            AssertionError
         '''
         pass
 
     def _next_trial(self):
+        ''' Get the next input to evaluate
+
+        Returns:
+            The next trial
+        '''
         rt = self.rt
         if self.plan.in_pre_phase(rt.it):
             lb = self.latent_space.get_latent_bounds()
@@ -61,6 +65,8 @@ class Optimiser:
         return x, {'ac_x':ac_x, 'model':model}
 
     def run(self, max_trials):
+        ''' Run the Bayesian optimisation for the given number of trials
+        '''
         self._check_configuration()
         rt = self.rt # runtime data
         while rt.iteration < max_trials:

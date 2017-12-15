@@ -1,0 +1,3 @@
+pip3 install Sphinx
+pip3 install recommonmark      # for markdown
+pip3 install sphinx_rtd_theme

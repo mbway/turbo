@@ -1,5 +1,6 @@
+# Notes
 
-# Things learned about machine learning during this exercise:
+## Things learned about machine learning during this exercise
 - the initial weight values have a lot more influence than I first thought they would
 - I think that as a rule of thumb: initialise hidden weights roughly of the order of magnitude that you want to work with (more flexible than the output weights), and the output layer should have weights roughly of the order of magnitude that you want the outputs to have
 - ReLu gives the results a straight line feel whereas tanh gives the results a more curved feel.
@@ -11,19 +12,19 @@
     - If more contrast is needed between the areas with/without data, 'negative samples' could be added in the places without data to make the cost function consider those areas.
 - For the task: the important thing is that in the areas without data, the uncertainty of the result is high, the actual predicted value does not matter as much, however roughly interpolating between the areas with data would be sensible.
 - cross entropy for binary classification: `-1/n*sum(y_hat*log y + (1-y_hat)*log (1-y))`
-    - when there are $k$ classes and $N$ training examples: $-\frac 1 n\sum_n^N\sum_k^K \hat Y^{(n)}_k\log_2 Y^{{n)}_k$
+    - when there are `$k$` classes and `$N$` training examples: `$-\frac 1 n\sum_n^N\sum_k^K \hat Y^{(n)}_k\log_2 Y^{(n)}_k$`
 
-# Things I learned about tensorflow
+## Things I learned about tensorflow
 - output layers can be sliced and different activation functions can be applied to different sections of it, eg to output several outputs with softmax, some more with linear etc
 
 
-# Tips for tuning hyper-parameters
+## Tips for tuning hyper-parameters
 - first list out the hyperparameters to tune and potentially rule out the ones that will be kept fixed (eg like the layer activation functions)
 
-# Things I learned about Gaussian processes
+## Things I learned about Gaussian processes
 - they are not translation invariant. The prior assumes a mean of 0, so this dictates how the function will tend when extrapolating. Take a small data set and add a constant to the y and observe how the GP prediction changes.
 
-# Things I learned about Bayesian optimisation
+## Things I learned about Bayesian optimisation
 - care has to be taken regarding the surrogate function or the results could be worse than random
 - Gaussian processes are harder to fit to data than expected
 - Plotting the results can help determine if the parameter ranges you imposed are too restrictive as the optimiser always wants to sample at the extreme of a parameter
@@ -38,7 +39,7 @@
 - Bayesian optimisation can handle pretty well with a noisy objective function, the GP will smooth out the surrogate function allowing good samples to still be chosen.
 - unfortunately, different objective functions can be fitted by different GP kernels, however without knowing the true function it is hard to determine the correct kernel to use.
 
-# Things I learned about GPs
+## Things I learned about GPs
 - standardizing the data (ie subtract mean, divide by variance) is _essential_. I failed to fit a GP when I had a dataset which was fairly reasonable and I gave the GP many samples to fit to with many optimiser repeats and I also narrowed the boundary on the kernel hyperparameters to prevent testing obviously bad values and to speed up the optimisation (which I think it did).
     - I was getting nowhere, then the first try after standardizing the data and the GP produced reasonable results
 - when the GP does not fit at all and describes the variation in the data as being completely noise, this may indicate that more restarts of the GP optimiser is required
@@ -51,7 +52,7 @@ plt.plot(xs)
 - Bayesian optimisation likes to test points around the edges, which can be problematic. For example testing out a neural network with max width, max depth and max epochs is not a good idea. Using an acquisition function which takes the evaluation time into account may help prevent this.
 - one major problem is when the surrogate function explains the data as being complete noise with a straight line mean. This is problematic because there is typically a slight gradient in the mean prediction line which results in a 'corner' of the configuration space to be sampled repeatedly. Usually after taking more samples the GP once again fits the data. Increasing the number of GP optimizer restarts helps. Unsurprisingly, the quality of the surrogate model dramatically changes the performance of the algorithm because it relies on the surrogate being accurate in order to make informed decisions. If the surrogate is misleading then Bayesian optimisation is useless (probably worse than random).
 
-# Things I learned about networking
+## Things I learned about networking
 - it is so much better to extract all the networking logic and abstract it when interacting with the rest of the program logic. It makes it much easier to analyse the behaviour of the protocol by reducing the number of possible execution paths
 - sockets sometimes break when you don't expect them to, and sometimes don't break when you expect them to. So always handle every possible failure when networking is involved
 - TCP is not as reliable as I thought, the checksum is weak and other errors which I simulated broke through to the application layer where I had to deal with them manually

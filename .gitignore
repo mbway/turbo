@@ -7,6 +7,10 @@ tags
 *.pyc
 build/
 
+# generated documentation
+docs/build/
+docs/source/_autosummary/
+
 # application data
 logs/
 frames/
