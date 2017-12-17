@@ -18,7 +18,7 @@ class random_selector:
     def __call__(self, num_points, latent_bounds):
         # generate values for each parameter
         cols = []
-        for name, pmin, pmax in latent_bounds:
+        for name, pmin, pmax in latent_bounds.ordered:
             cols.append(np.random.uniform(pmin, pmax, size=(num_points, 1)))
         return np.hstack(cols)
 

@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.abspath('../../'))
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
+    'nbsphinx',
     'sphinx.ext.autodoc',
     'sphinx.ext.autosummary',
     'sphinx.ext.napoleon',
@@ -73,6 +74,7 @@ autosummary_generate = True
 # documentation at https://sphinxcontrib-napoleon.readthedocs.io/en/latest/
 napoleon_include_init_with_doc = True # treat __init__ differently from the class docstring
 napoleon_include_private_with_doc = True # include private members
+napoleon_include_special_with_doc = True # include special members (eg __call__)
 
 
 # Add any paths that contain templates here, relative to this directory.
@@ -115,7 +117,7 @@ language = None
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This patterns also effect to html_static_path and html_extra_path
-exclude_patterns = []
+exclude_patterns = ['**.ipynb_checkpoints']
 
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = 'sphinx'

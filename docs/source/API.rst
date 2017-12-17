@@ -5,12 +5,19 @@ API
     :toctree: _autosummary
 
     turbo
+    turbo.gui
+    turbo.gui.jupyter
+    turbo.modules
+    turbo.modules.acquisition_functions
+    turbo.modules.acquisition_maximisation
+    turbo.modules.latent_space
+    turbo.modules.listener
+    turbo.modules.naive_selectors
+    turbo.modules.plan
+    turbo.modules.surrogates
     turbo.optimiser
-    turbo.optimiser.modules
-    turbo.optimiser.modules.acquisition_functions
-    turbo.optimiser.modules.acquisition_maximisation
-    turbo.optimiser.modules.latent_space
-    turbo.optimiser.modules.naive_selectors
-    turbo.optimiser.modules.plan
-    turbo.optimiser.modules.surrogates
+    turbo.plotting
+    turbo.plotting.basic
+    turbo.plotting.trials
+    turbo.utils
 

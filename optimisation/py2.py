@@ -1,5 +1,4 @@
-'''
-Compatibility for python 2
+'''Compatibility for python 2
 
 Care should be taken with the following differences which cannot be patched:
 - must explicitly inherit from object

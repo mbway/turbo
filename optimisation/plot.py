@@ -109,7 +109,7 @@ class OptimiserPlotting:
         fig, ax = plt.subplots(figsize=(16, 10)) # inches
 
         xs = range(1, len(self.samples)+1)
-        costs = [(true_cost - s.cost if self.maximise_cost
+        costs = [(true_best - s.cost if self.maximise_cost
                   else s.cost - true_best) for s in self.samples]
 
         ax.plot(xs, costs, marker='o', markersize=4, color='#4c72b0', label='error')
@@ -530,7 +530,7 @@ class BayesianOptimisationOptimiserPlotting:
             # start with s.next_x since that is a point which is guaranteed to
             # have a prediction plotted through it
             param_zeroed = np.vstack((chosen_point, xs))
-            param_zeroed[0,param_index] = 0
+            param_zeroed[0,param_index] = 0#TODO: shouldn't that be [:,param_index]?
             param_zeroed = unique_rows_close(param_zeroed, close_tolerance=1e-3)
             param_zeroed = param_zeroed[1:,:] # exclude chosen_point
 
