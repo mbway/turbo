@@ -2,6 +2,7 @@
 ''' GUI utilities for use with Jupyter/IPython '''
 
 try:
+    from IPython.core.debugger import set_trace
     from IPython.display import clear_output, display, Image, HTML
     import ipywidgets as widgets
 except ImportError:
@@ -30,6 +31,12 @@ if in_jupyter():
     # image fills the entire sub-area.
     display(HTML('<style>div.output_subarea.output_png{'
                  'overflow:hidden;width:100%;max-width:100%}</style>'))
+
+def jupyter_set_trace():
+    # Note: once out of this function put a breakpoint on the line after it then
+    # continue to reach it, otherwise stepping with next leads deep into some
+    # system code which you don't care about.
+    set_trace()
 
 class LabelledProgressBar(widgets.IntProgress):
     def __init__(self, min, max, initial_value, label_prefix):
@@ -93,59 +100,100 @@ def figure_to_Image(fig):
     fig.savefig(img, format='png', bbox_inches='tight')
     return Image(data=img.getvalue(), format='png', width='100%')
 
-def range_plot_slider(range_, plot, pre_compute=False, slider_name=''):
+class PlotMemoization:
+    '''A utility for memoising the results of a plotting function.
+
+    This is useful when generating graphs interactively by changing some
+    parameter, this class allows a more responsive UI if the particular
+    parameter values have been encountered before.
+
     '''
-    Display an integer slider which takes the given values, with `plot()` being
-    run every time the value changes.
 
-    If plot returns a figure then the result can be memoised so that the plot
-    does not have to be recalculated if the slider falls on the same value twice.
+    def __init__(self, plot):
+        '''
+        Args:
+            plot (args -> matplotlib.figure.Figure): a function which takes some
+                parameters and optionally returns the plotted figure for
+                memoisation. If the function does not return a figure then the
+                current figure will be memoised instead.
+        '''
+        # key : Image
+        self.saved = {}
+        self.plot = plot
 
-    Args:
-        range\_: either a `range` or an `integer` (in which case the range will
-            be from 0 to `range_` exclusive)
-        plot (int -> matplotlib.figure.Figure): a function which takes the
-            current slider value and optionally returns the plotted figure for
-            memoisation. If the function does not return a figure then the
-            current figure will be memoised instead.
-    '''
-    if isinstance(range_, int):
-        range_ = range(0, range_)
+    def show(self, key, args):
+        '''Show `plot(**args)` and store with the given key, displaying from memory if already computed
 
-    saved = {} # iteration : Image
-
-    def slider_changed(n):
-        if n not in saved:
+        Args:
+            key: a value to store the plot against
+            args (dict): arguments to `self.plot`
+        '''
+        if key not in self.saved:
             # if function returns None then use the current figure
-            fig = plot(n) or plt.gcf()
-            saved[n] = figure_to_Image(fig) # memoise
+            fig = self.plot(**args) or plt.gcf()
+            self.saved[key] = figure_to_Image(fig) # memoise
             plt.close(fig) # free resources
-        display(saved[n])
+        display(self.saved[key])
 
-    if pre_compute:
-        bar = LabelledProgressBar(0, range_[-1], initial_value=0)
+    def pre_compute(keys, args_list):
+        '''compute the plots for the given keys in one go so that they are all
+        stored in memory from then on.
+
+        Args:
+            keys: a list of keys to pre-compute
+            args_list: a list of dictionaries corresponding to `keys`
+        '''
+        bar = LabelledProgressBar(0, len(keys), initial_value=0)
         # plot each step (displaying the output) and save each figure
-        for n in range_:
+        for key, args in zip(keys, args_list):
             clear_output(wait=True)
             display(bar)
-            slider_changed(n)
+            self.show(key, args)
             bar.increment()
         bar.close()
         clear_output()
 
-    return list_slider(range_, slider_changed, slider_name=slider_name)
+    def clear(self):
+        ''' delete the memoised plots '''
+        self.saved.clear()
 
-def list_slider(list_, function, slider_name='Item N: '):
+
+def slider(values, function, description=None, initial=0):
     '''A utility for easily setting up a Jupyter slider for items of a list
 
     Args:
-        list\_: a list of items for the slider value to correspond to
-        function: a function which takes an item of `list_` as an argument
-        slider_name: the description/label to apply to the slider
+        values (int or list): either a list of items for the slider value to
+            correspond to, or an integer, in which case the values will be the
+            range from 0 to `values`
+        function: a function which takes an item of `values` as an argument
+        description (str): the description/label to apply to the slider
+        initial (int): the index of the initial value
     '''
-    slider = widgets.IntSlider(value=len(list_), min=1, max=len(list_),
+    if isinstance(values, int):
+        values = range(0, values)
+    # allow negative indices e.g. values[-1]
+    if initial < 0:
+        initial = len(values)-initial
+    slider = widgets.IntSlider(value=initial, min=0, max=len(values)-1,
                 continuous_update=False, layout=widgets.Layout(width='100%'))
-    slider.description = slider_name
-    widgets.interact(lambda val: function(list_[val-1]), val=slider)
+    slider.description = description
+    widgets.interact(lambda i: function(values[i]), i=slider)
     return slider
+
+def dropdown(values, function, description=None, initial=0):
+    '''A utility for easily setting up a Jupyer dropdown with the given values
+
+    Args:
+        values: a list of the possible dropdown values
+        function: a function which takes the current selected value as an argument
+        description (str): the label to give to the dropdown
+        initial (Int): an index into the values list to give initially
+    '''
+    dropdown = widgets.Dropdown(
+        options=values,
+        value=values[initial],
+        description=description
+    )
+    widgets.interact(lambda val: function(val), val=dropdown)
+    return dropdown
 

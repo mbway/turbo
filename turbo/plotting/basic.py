@@ -19,7 +19,7 @@ def plot_error_over_time(opt, true_best, log_scale=False, ax=None):
         ax: the axes to plot to (optional)
     '''
     if ax is None:
-        fig, ax = plt.subplots(figsize=(16, 10)) # inches
+        fig, ax = plt.subplots(figsize=(10, 4)) # inches
 
     rt = opt.rt
     n = rt.num_trials()
@@ -34,8 +34,8 @@ def plot_error_over_time(opt, true_best, log_scale=False, ax=None):
     ax.plot(xs, errors, marker='o', markersize=4, color='#4c72b0', label='error')
 
     ax.set_title('Error Over Time', fontsize=14)
-    ax.set_xlabel('trials')
-    ax.set_ylabel('error')
+    ax.set_xlabel('Trials')
+    ax.set_ylabel('Error')
 
     if log_scale:
         ax.set_yscale('log')

@@ -11,17 +11,35 @@ import matplotlib.transforms
 
 # local imports
 import turbo.modules as tm
+import turbo.gui as tg
 from turbo.utils import row2D, unique_rows_close
 
 
 #TODO: could use k-means to choose N locations to plot the surrogate through to get the best coverage of interesting regions while using as few plots as possible
 
 class PlottingRecorder(tm.Listener):
+    '''
+    Attributes:
+        trials: a list of Trial objects recorded from the optimiser
+    '''
     class Trial:
-        __slots__ = ('trial_num', 'x', 'y', 'extra_data')
+        #TODO: re-enable slots (disabled so Jupyter doesn't forget the class between reloads)
+        #__slots__ = ('trial_num', 'x', 'y', 'extra_data')
+        def __init__(self):
+            self.trial_num = None
+            self.x = None
+            self.y = None
+            self.extra_data = None
 
     def __init__(self):
         self.trials = {}
+        self.optimiser = None
+
+    def registered(self, optimiser):
+        print('listener registered')
+        assert self.optimiser is None or self.optimiser == optimiser, \
+            'cannot use the same PlottingRecorder with multiple optimisers'
+        self.optimiser = optimiser
 
     def selection_started(self, trial_num):
         assert trial_num not in self.trials.keys()
@@ -72,8 +90,7 @@ def choose_predict_locations(trial_x, f_xs, param_index):
     param_zeroed = param_zeroed[1:, :] # exclude the trial point (first row)
     return param_zeroed
 
-
-def plot_trial_1D(opt, rec, param, trial_num, true_objective=None,
+def plot_trial_1D(rec, param=None, trial_num=None, true_objective=None,
                   divisions=200, n_sigma=2, predict_through_all=True,
                   log_scale=False):
     r'''Plot the state of Bayesian optimisation (perturbed along a single
@@ -87,13 +104,21 @@ def plot_trial_1D(opt, rec, param, trial_num, true_objective=None,
     point to test to show how the acquisition function varies along that
     dimension. The same holds for higher dimensions but is harder to visualise.
 
+    Note:
+        `param` and `trial_num` may both be `None` at the same time, in which
+        case both will be chosen interactively.
+
     Args:
-        opt (turbo.Optimiser): the `Optimiser` who's data to plot
-        rec (PlottingRecorder): the recorder which observed the run of `opt`
-        param (str): the name of the parameter to perturb to obtain the graph
-        trial_num (int): the number of the trial to plot
+        rec (PlottingRecorder): the recorder which observed the run of an optimiser
+        param (str): the name of the parameter to perturb to obtain the graph.
+            None => choose interactively
+        trial_num (int): the number of the trial to plot.
+            None => choose interactively
         true_objective: true objective function (or array of pre-computed cost
             values corresponding to the number of divisions) (None to omit)
+        divisions (int): the resolution of the plot / number of points along the
+            parameter domain to plot at. (higher => slightly better quality but
+            takes longer to render)
         n_sigma (float): the number of standard deviations from the mean to plot
             the uncertainty confidence interval.
 
@@ -105,9 +130,38 @@ def plot_trial_1D(opt, rec, param, trial_num, true_objective=None,
             iteration.
         log_scale: whether to use a log scale for the `x` axis
     '''
+
+    # choose interactively
+    if param is None or trial_num is None:
+        opt = rec.optimiser
+        # partially apply by specifying all the non-interactive parameters
+        plot = lambda param, trial_num: plot_trial_1D(rec, param, trial_num,
+                true_objective, divisions, n_sigma, predict_through_all, log_scale)
+        # store the plots so they only have to be rendered once
+        memoised = tg.PlotMemoization(plot)
+        # updated by the widgets, or left alone if not None
+        args = {'param' : param, 'trial_num' : trial_num}
+        def arg_changed(name, val):
+            args[name] = val
+            key = (args['param'], args['trial_num'])
+            if None not in key: # all args set
+                memoised.show(key, args)
+
+        if param is None:
+            params = [b[0] for b in opt.bounds.ordered]
+            callback = lambda val: arg_changed('param', val)
+            tg.dropdown(params, callback, description='Param:', initial=0)
+
+        if trial_num is None:
+            callback = lambda val: arg_changed('trial_num', val)
+            tg.slider(opt.rt.num_trials(), callback, description='Trial:', initial=-1)
+
+        return
+
     ################
     # Extract Data
     ################
+    opt = rec.optimiser
     rt = opt.rt
     assert trial_num >= 0 and trial_num < rt.max_trials, 'invalid iteration number'
     assert opt.async_eval is None, 'this function does not support asynchronous optimisation runs'
@@ -212,7 +266,7 @@ def plot_trial_1D(opt, rec, param, trial_num, true_objective=None,
             # cap to make sure they don't become invisible
             alpha = max(0.4/locs.shape[0], 0.015)
             for p in locs:
-                plot_prediction_through(row2D(row), label=False, alphas=(alpha, alpha))
+                plot_prediction_through(row2D(p), label=False, alphas=(alpha, alpha))
 
     ### Plot Vertical Bars
     bar_width, bar_color = 1, '#3590ce'
