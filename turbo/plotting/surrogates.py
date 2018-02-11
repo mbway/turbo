@@ -73,7 +73,7 @@ def plot_surrogate_hyper_params_1D(rec, param_index, trial_nums=None,
         c, c_label = values[axes[2]]
 
         s = ax.scatter(x, y, c=c, cmap='viridis', s=size, alpha=0.8)
-        cbar = fig.colorbar(s, ticks=trial_nums if axes[2] == 'trial_num' else None)
+        cbar = fig.colorbar(s, ticks=trial_nums if axes[2] == 'trial_num' else None, ax=ax)
         cbar.set_label(c_label)
         ax.set_xlabel(x_label)
         ax.set_ylabel(y_label)
@@ -121,7 +121,7 @@ def plot_surrogate_hyper_params_2D(rec, param_indices=(0, 1), trial_nums=None,
 
         sizes = tb.utils.remap(likelihoods, (min(likelihoods), max(likelihoods)), size_limits)
         s = ax.scatter(hyper_params[:,x_param], hyper_params[:,y_param], c=trial_nums, cmap='viridis', s=sizes, alpha=0.8)
-        c = fig.colorbar(s, ticks=trial_nums)
+        c = fig.colorbar(s, ticks=trial_nums, ax=ax)
         c.set_label('trial number')
 
         ax.set_title('Surrogate Hyperparameters', fontsize=14)

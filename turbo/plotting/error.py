@@ -27,6 +27,7 @@ def plot_error_over_time(opt, true_best, log_scale=False, plot_best=True, fig_ax
     xs = range(1, n+1)
     errors = [(true_best - s if opt.is_maximising() else s - true_best)
               for s in rt.trial_ys]
+    assert errors, 'no trials'
 
     if any(e < 0 for e in errors):
         print('warning: some of the trials are better than true_best!')

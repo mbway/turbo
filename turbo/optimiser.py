@@ -182,7 +182,8 @@ class Optimiser:
         else:
             X, y = np.vstack(rt.trial_xs), np.array(rt.trial_ys)
             self._notify('fitting_surrogate', trial_num, X, y)
-            model = self.surrogate_factory(X, y)
+            model = self.surrogate_factory(X, y, hyper_params_hint=rt.last_model_params)
+            rt.last_model_params = model.get_hyper_params()
             acq = self._get_acquisition_function(trial_num, model)
             self._notify('maximising_acq', trial_num, acq)
             x, ac_x = self.maximise_acq(lb, acq)

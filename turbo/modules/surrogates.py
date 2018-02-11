@@ -79,8 +79,13 @@ class Surrogate(object):
         be configured. The optimiser then uses the factory to generate and train
         a new model each iteration.
         '''
-        def __call__(self, X=None, y=None):
+        def __call__(self, X=None, y=None, hyper_params_hint=None):
             ''' generate a surrogate model trained on the given data
+
+            Args:
+                hyper_params_hint: when provided, use the given hyper parameters
+                    as a starting point during the optimisation process.
+                    Obtained using `get_hyper_params()` on a trained model.
 
             Note:
                 can either omit `X, y` in which case the surrogate will not be
@@ -93,10 +98,9 @@ class Surrogate(object):
 class SciKitGPSurrogate(Surrogate):
     def __init__(self, gp_params):
         self.gp_params = gp_params
-        self.model = None
+        self.model = sk_gp.GaussianProcessRegressor(**self.gp_params)
 
     def fit(self, X, y, hyper_params=None):
-        self.model = sk_gp.GaussianProcessRegressor(**self.gp_params)
         if hyper_params is None:
             self.model.fit(X, y)
         else:
@@ -145,11 +149,20 @@ class SciKitGPSurrogate(Surrogate):
             'copy_X_train' : True
         }
 
-        def __init__(self, gp_params=None):
+        def __init__(self, gp_params=None, use_hint=True):
+            '''
+            Args:
+                gp_params (dict): parameters to pass to scikit
+                    see: http://scikit-learn.org/stable/modules/generated/sklearn.gaussian_process.GaussianProcessRegressor.html
+                use_hint: whether to use the hyper parameters hint (usually the
+                    hyperparameters of the previous model) as a starting point
+                    for the hyper parameter optimisation.
+            '''
             assert sk_gp is not None, 'failed to import sklearn.'
             self.gp_params = self.default_params if gp_params is None else gp_params
+            self.use_hint = use_hint
 
-        def __call__(self, X=None, y=None):
+        def __call__(self, X=None, y=None, hyper_params_hint=None):
             '''
             Note:
                 can either omit `X, y` in which case the surrogate will not be
@@ -157,6 +170,10 @@ class SciKitGPSurrogate(Surrogate):
             '''
             sur = SciKitGPSurrogate(self.gp_params)
             if X is not None and y is not None:
+                if self.use_hint and hyper_params_hint is not None:
+                    # the hyperparameter values provided here are used as a
+                    # starting point during restart 0 of the optimiser.
+                    sur.model.kernel = sur.model.kernel.clone_with_theta(hyper_params_hint)
                 sur.fit(X, y)
             return sur
 
