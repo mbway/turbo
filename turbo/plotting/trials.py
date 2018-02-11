@@ -17,53 +17,7 @@ from turbo.utils import row2D, unique_rows_close
 
 #TODO: could use k-means to choose N locations to plot the surrogate through to get the best coverage of interesting regions while using as few plots as possible
 
-class PlottingRecorder(tm.Listener):
-    '''
-    Attributes:
-        trials: a list of Trial objects recorded from the optimiser
-    '''
-    class Trial:
-        #TODO: re-enable slots (disabled so Jupyter doesn't forget the class between reloads)
-        #__slots__ = ('trial_num', 'x', 'y', 'extra_data')
-        def __init__(self):
-            self.trial_num = None
-            self.x = None
-            self.y = None
-            self.extra_data = None
-
-    def __init__(self):
-        self.trials = {}
-        self.optimiser = None
-
-    def registered(self, optimiser):
-        print('listener registered')
-        assert self.optimiser is None or self.optimiser == optimiser, \
-            'cannot use the same PlottingRecorder with multiple optimisers'
-        self.optimiser = optimiser
-
-    def selection_started(self, trial_num):
-        assert trial_num not in self.trials.keys()
-        t = PlottingRecorder.Trial()
-        t.trial_num = trial_num
-        self.trials[trial_num] = t
-
-    def eval_started(self, trial_num, x, extra_data):
-        t = self.trials[trial_num]
-        t.x = x
-        t.extra_data = extra_data
-
-    def eval_finished(self, trial_num, y):
-        t = self.trials[trial_num]
-        t.y = y
-
-    def get_data_for_trial(self, trial_num):
-        #TODO: for async cannot assume that finished == all trials before trial_num
-        finished = [self.trials[n] for n in range(trial_num)]
-        trial = self.trials[trial_num]
-        return finished, trial
-
-
-def vary_param(point, param_index, param_range):
+def _vary_param(point, param_index, param_range):
     '''generate a matrix of points (as rows) which are based on the given point,
     but varies along the given range for a single given parameter.
     '''
@@ -73,7 +27,7 @@ def vary_param(point, param_index, param_range):
     points[:,param_index] = param_range
     return points
 
-def choose_predict_locations(trial_x, f_xs, param_index):
+def _choose_predict_locations(trial_x, f_xs, param_index):
     '''return a matrix with the points to predict through as rows
 
     avoid drawing predictions of the same place more than once, so
@@ -92,7 +46,7 @@ def choose_predict_locations(trial_x, f_xs, param_index):
 
 def plot_trial_1D(rec, param=None, trial_num=None, true_objective=None,
                   divisions=200, n_sigma=2, predict_through_all=True,
-                  log_scale=False):
+                  log_scale=False, fig=None):
     r'''Plot the state of Bayesian optimisation (perturbed along a single
     parameter) at the time that the given trial was starting its evaluation.
 
@@ -114,6 +68,7 @@ def plot_trial_1D(rec, param=None, trial_num=None, true_objective=None,
             None => choose interactively
         trial_num (int): the number of the trial to plot.
             None => choose interactively
+            <0 => index from the end/last trial
         true_objective: true objective function (or array of pre-computed cost
             values corresponding to the number of divisions) (None to omit)
         divisions (int): the resolution of the plot / number of points along the
@@ -129,6 +84,7 @@ def plot_trial_1D(rec, param=None, trial_num=None, true_objective=None,
             every sample or just through the location of the point chosen this
             iteration.
         log_scale: whether to use a log scale for the `x` axis
+        fig: the matplotlib figure to plot onto
     '''
 
     # choose interactively
@@ -154,7 +110,7 @@ def plot_trial_1D(rec, param=None, trial_num=None, true_objective=None,
 
         if trial_num is None:
             callback = lambda val: arg_changed('trial_num', val)
-            tg.slider(opt.rt.num_trials(), callback, description='Trial:', initial=-1)
+            tg.slider(opt.rt.finished_trials, callback, description='Trial:', initial=-1)
 
         return
 
@@ -163,6 +119,9 @@ def plot_trial_1D(rec, param=None, trial_num=None, true_objective=None,
     ################
     opt = rec.optimiser
     rt = opt.rt
+    rt.check_consistency()
+    # allow negative trial numbers for referring to the end
+    trial_num = rt.max_trials + trial_num if trial_num < 0 else trial_num
     assert trial_num >= 0 and trial_num < rt.max_trials, 'invalid iteration number'
     assert opt.async_eval is None, 'this function does not support asynchronous optimisation runs'
 
@@ -187,17 +146,17 @@ def plot_trial_1D(rec, param=None, trial_num=None, true_objective=None,
     best_i = np.argmax(f_ys) if opt.is_maximising() else np.argmin(f_ys)
 
     model = trial.extra_data['model']
-    acq_fun = opt.acq_func_factory(trial_num, model, opt.desired_extremum)
+    acq_fun = rec.get_acquisition_function(trial_num)
     # it makes sense to plot the acquisition function through the slice
     # corresponding to the current trial.
-    trial_perturbed = vary_param(trial.x, param_index, latent_range)
+    trial_perturbed = _vary_param(trial.x, param_index, latent_range)
     trial_ac = acq_fun(trial_perturbed)
 
 
     ##################
     # Plotting Setup
     ##################
-    fig = plt.figure(figsize=(16, 10)) # inches
+    fig = fig or plt.figure(figsize=(16, 10)) # inches
     grid = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=[2, 1])
     ax1, ax2 = fig.add_subplot(grid[0]), fig.add_subplot(grid[1])
 
@@ -242,7 +201,7 @@ def plot_trial_1D(rec, param=None, trial_num=None, true_objective=None,
 
     ### Plot Surrogate Function
     def plot_prediction_through(point, label, alphas):
-        perturbed = vary_param(point, param_index, latent_range)
+        perturbed = _vary_param(point, param_index, latent_range)
         mus, sigmas = model.predict(perturbed, return_std_dev=True)
         if label:
             mu_label = r'surrogate $\mu$'
@@ -261,7 +220,7 @@ def plot_trial_1D(rec, param=None, trial_num=None, true_objective=None,
 
     # plot the predictions through each sample
     if predict_through_all:
-        locs = choose_predict_locations(trial.x, f_xs, param_index)
+        locs = _choose_predict_locations(trial.x, f_xs, param_index)
         if len(locs) > 0:
             # cap to make sure they don't become invisible
             alpha = max(0.4/locs.shape[0], 0.015)
@@ -279,8 +238,8 @@ def plot_trial_1D(rec, param=None, trial_num=None, true_objective=None,
     # Plotting Acquisition Function
     #################################
     ax2.set_xlabel('parameter {}'.format(param))
-    ax2.set_ylabel(acq_fun.get_name())
-    ax2.set_title('Acquisition Function')
+    ax2.set_ylabel('{}({})'.format(acq_fun.get_name(), param))
+    ax2.set_title('Acquisition Function ({})'.format(acq_fun.get_name()))
 
     ax2.plot(param_range, trial_ac, '-', color='g', linewidth=1.0,
              label='acquisition function')
@@ -293,3 +252,7 @@ def plot_trial_1D(rec, param=None, trial_num=None, true_objective=None,
 
     ax2.legend()
     return fig
+
+
+#TODO 2D plot
+
