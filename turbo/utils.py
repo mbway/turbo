@@ -96,3 +96,13 @@ def unique_rows_close(arr, close_tolerance):
             avoid = np.append(avoid, r, axis=0)
             keep_rows.append(i)
     return arr[keep_rows]
+
+def remap(values, range_a, range_b):
+    ''' map the values which live in range_a to range_b
+
+    Args:
+        values: value or array of values to remap
+        range_a: (min, max) of the original domain
+        range_b (min, max) of the new domain
+    '''
+    return np.interp(values, range_a, range_b)

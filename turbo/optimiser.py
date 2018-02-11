@@ -39,15 +39,23 @@ class OptimiserRuntime:
         self.trial_ys = [] # list of scalars
         self.last_model_params = None
 
-    def num_trials(self):
-        return len(self.trial_ys)
+    def check_consistency(self):
+        '''check that the optimiser runtime data makes sense
 
+        Raises:
+            AssertionError
+        '''
+        assert self.started_trials >= self.finished_trials
+        assert len(self.trial_xs) == len(self.trial_ys)
+        assert len(self.trial_ys) == self.finished_trials
 
 
 class Optimiser:
     def __init__(self, objective, desired_extremum, bounds):
         self.objective = objective
-        self.desired_extremum = desired_extremum # TODO: sanitise
+        #TODO: internally, should use is_maximising or is_minimising where possible
+        assert desired_extremum in ('min', 'max'), 'desired_extremum must be either "min" or "max"'
+        self.desired_extremum = desired_extremum
         self.bounds = Bounds(bounds)
 
         self.latent_space = None
@@ -130,6 +138,34 @@ class Optimiser:
     def restart(self):
         self.rt = OptimiserRuntime()
 
+
+    def get_incumbent(self):
+        '''get the current best trial
+
+        Returns:
+            (i, x, y)
+            i = trial number
+            x = the trial input
+            y = the trial objective function value
+        '''
+        rt = self.rt
+        i = np.argmax(rt.trial_ys) if self.is_maximising() else np.argmin(rt.trial_ys)
+        return (i, rt.trial_xs[i], rt.trial_ys[i])
+
+    def _get_acquisition_function(self, trial_num, model):
+        ''' instantiate an acquisition function for the given iteration '''
+        acq_type = self.acq_func_factory.get_type()
+        acq_args = [trial_num, model, self.desired_extremum]
+        if acq_type == 'optimism':
+            pass # no extra arguments needed
+        elif acq_type == 'improvement':
+            _, _, incumbent_cost = self.get_incumbent()
+            acq_args.append(incumbent_cost)
+        else:
+            raise NotImplementedError('unsupported acquisition function type: {}'.format(acq_type))
+        return self.acq_func_factory(*acq_args)
+
+
     def _select_trial(self, trial_num):
         ''' Get the next input to evaluate
 
@@ -139,18 +175,21 @@ class Optimiser:
         rt = self.rt
         lb = self.latent_space.get_latent_bounds()
 
+        self._notify('selection_started', trial_num)
         if self.plan.in_pre_phase(trial_num):
             x = self.pre_phase_select(num_points=1, latent_bounds=lb)
-            extra_data = {'type':'pre_phase'}
+            selection_details = {'type': 'pre_phase'}
         else:
             X, y = np.vstack(rt.trial_xs), np.array(rt.trial_ys)
             self._notify('fitting_surrogate', trial_num, X, y)
             model = self.surrogate_factory(X, y)
-            acq = self.acq_func_factory(trial_num, model, self.desired_extremum)
+            acq = self._get_acquisition_function(trial_num, model)
             self._notify('maximising_acq', trial_num, acq)
             x, ac_x = self.maximise_acq(lb, acq)
-            extra_data = {'type':'bayes', 'ac_x':ac_x, 'model':model}
-        return x, extra_data
+            selection_details = {'type': 'bayes', 'ac_x': ac_x, 'model': model}
+        self._notify('selection_finished', trial_num, x, selection_details)
+
+        return x
 
 
     def run(self, max_trials):
@@ -160,17 +199,15 @@ class Optimiser:
         self._check_settings()
         rt = self.rt # runtime data
         rt.running = True
-        rt.max_trials = max_trials # TODO: naming
+        rt.max_trials = max_trials # TODO: naming (overall vs this run)
         self._notify('run_started', rt.finished_trials, max_trials)
 
         while rt.finished_trials < max_trials:
             trial_num = rt.started_trials
 
-            self._notify('selection_started', trial_num)
-            #TODO: could call extra data 'selection_details'?
-            x, extra_data = self._select_trial(trial_num)
+            x = self._select_trial(trial_num)
             config = self.point_to_config(self.latent_space.from_latent(x))
-            self._notify('eval_started', trial_num, x, extra_data)
+            self._notify('eval_started', trial_num)
 
             rt.started_trials += 1
             y = self.objective(**config)
@@ -180,6 +217,7 @@ class Optimiser:
             rt.trial_ys.append(y)
             rt.finished_trials += 1
             self._notify('eval_finished', trial_num, y)
+            rt.check_consistency()
 
         rt.running = False
         self._notify('run_finished')

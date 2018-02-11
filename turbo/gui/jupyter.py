@@ -33,9 +33,14 @@ if in_jupyter():
                  'overflow:hidden;width:100%;max-width:100%}</style>'))
 
 def jupyter_set_trace():
-    # Note: once out of this function put a breakpoint on the line after it then
-    # continue to reach it, otherwise stepping with next leads deep into some
-    # system code which you don't care about.
+    '''
+    Note: don't use this for code running directly in a cell, wrap the contents
+        of the cell in a function first
+
+    Note: once out of this function put a breakpoint on the line after it then
+        continue to reach it, otherwise stepping with next leads deep into some
+        system code which you don't care about.
+    '''
     set_trace()
 
 class LabelledProgressBar(widgets.IntProgress):

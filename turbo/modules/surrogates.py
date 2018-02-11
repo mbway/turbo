@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+import numpy as np
+
 try:
     import sklearn.gaussian_process as sk_gp
 except ImportError:
@@ -69,6 +71,25 @@ class Surrogate(object):
         '''
         raise NotImplementedError()
 
+    class Factory:
+        ''' Passed to the optimiser and used to create Surrogate instances for
+        each iteration of the optimisation
+
+        The factory is instantiated by the user so that the surrogate model can
+        be configured. The optimiser then uses the factory to generate and train
+        a new model each iteration.
+        '''
+        def __call__(self, X=None, y=None):
+            ''' generate a surrogate model trained on the given data
+
+            Note:
+                can either omit `X, y` in which case the surrogate will not be
+                fitted to anything, or provide both.
+            '''
+            raise NotImplementedError()
+
+
+
 class SciKitGPSurrogate(Surrogate):
     def __init__(self, gp_params):
         self.gp_params = gp_params
@@ -105,32 +126,38 @@ class SciKitGPSurrogate(Surrogate):
         return self.model.sample_y(x, n, random_state=None)
 
     def get_hyper_params(self):
+        '''
+        Note:
+            theta is log transformed
+        '''
         return np.copy(self.model.kernel_.theta)
 
 
-class SciKitGPSurrogateFactory:
+    class Factory(Surrogate.Factory):
+        default_params = {
+            # the multiplier allows the kernel to have a peak value different from
+            # 1, and therefore can fit better to data of different scales.
+            # nu=1.5 assumes the target function is once-differentiable
+            # WhiteKernel assumes that the objective function contains some noise
+            'kernel' : 1.0 * sk_gp.kernels.Matern(nu=1.5) + sk_gp.kernels.WhiteKernel(),
+            'n_restarts_optimizer' : 10,
+            # make a copy of the training data (in-case it is modified)
+            'copy_X_train' : True
+        }
 
-    default_params = {
-        # the multiplier allows the kernel to have a peak value different from
-        # 1, and therefore can fit better to data of different scales.
-        # nu=1.5 assumes the target function is once-differentiable
-        # WhiteKernel assumes that the objective function contains some noise
-        'kernel' : 1.0 * sk_gp.kernels.Matern(nu=1.5) + sk_gp.kernels.WhiteKernel(),
-        'n_restarts_optimizer' : 10,
-        # make a copy of the training data (in-case it is modified)
-        'copy_X_train' : True
-    }
+        def __init__(self, gp_params=None):
+            assert sk_gp is not None, 'failed to import sklearn.'
+            self.gp_params = self.default_params if gp_params is None else gp_params
 
-    def __init__(self, gp_params=None):
-        assert sk_gp is not None, 'failed to import sklearn.'
-        self.gp_params = self.default_params if gp_params is None else gp_params
-
-    def __call__(self):
-        return SciKitGPSurrogate(self.gp_params)
-
-    def __call__(self, X, y):
-        sur = SciKitGPSurrogate(self.gp_params)
-        sur.fit(X, y)
-        return sur
+        def __call__(self, X=None, y=None):
+            '''
+            Note:
+                can either omit `X, y` in which case the surrogate will not be
+                fitted to anything, or provide both.
+            '''
+            sur = SciKitGPSurrogate(self.gp_params)
+            if X is not None and y is not None:
+                sur.fit(X, y)
+            return sur
 
 

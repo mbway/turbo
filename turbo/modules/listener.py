@@ -9,6 +9,7 @@ class Listener:
             - selection_started
                 - fitting_surrogate (possibly)
                 - maximising_acq (possibly)
+            - selection_finished
             - eval_started
         - eval_finished (some time later, others may have started in the meantime)
         - run_finished
@@ -45,7 +46,16 @@ class Listener:
             once `trial_started()` is called, the acquisition maximisation has finished
         '''
         pass
-    def eval_started(self, trial_num, x, extra_data):
+    def selection_finished(self, trial_num, x, selection_details):
+        '''Called when the trial point `x` has been chosen
+
+        Args:
+            selection_details (dict): information about the selection process.
+                The specific contents depends on what type of selection
+                occurred, which can be determined by the value of
+                `selection_details['type']`
+        '''
+    def eval_started(self, trial_num):
         '''Called once the trial point `x` has been selected and evaluation will begin '''
         pass
     def eval_finished(self, trial_num, y):
