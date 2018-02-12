@@ -17,14 +17,14 @@ from turbo.utils import row2D, unique_rows_close
 
 #TODO: could use k-means to choose N locations to plot the surrogate through to get the best coverage of interesting regions while using as few plots as possible
 
-def _vary_param(point, param_index, param_range):
+def _vary_param(point, param_index, range_):
     '''generate a matrix of points (as rows) which are based on the given point,
     but varies along the given range for a single given parameter.
     '''
-    param_range = param_range.flatten()
+    range_ = range_.flatten()
     # create many duplicates of the given point
-    points = np.repeat(row2D(point), len(param_range), axis=0)
-    points[:,param_index] = param_range
+    points = np.repeat(row2D(point), len(range_), axis=0)
+    points[:,param_index] = range_
     return points
 
 def _choose_predict_locations(trial_x, f_xs, param_index):
@@ -44,9 +44,55 @@ def _choose_predict_locations(trial_x, f_xs, param_index):
     param_zeroed = param_zeroed[1:, :] # exclude the trial point (first row)
     return param_zeroed
 
-def plot_trial_1D(rec, param=None, trial_num=None, true_objective=None,
-                  divisions=200, n_sigma=2, predict_through_all=True,
-                  log_scale=False, fig=None):
+def interactive_plot_trial_1D(rec, param=None, trial_num=None, *args, **kwargs):
+    '''choose the param and trial_num for the trial plot interactively
+
+    param and trial_num can be left as None to be chosen interactively, or can be specified
+
+    Args:
+        rec (PlottingRecorder): the recorder which observed the run of an optimiser
+        param: None to be chosen interactively, or can be specified
+        trial_num: None to be chosen interactively, or can be specified
+    '''
+    # choose interactively
+    if param is None or trial_num is None:
+        opt = rec.optimiser
+        # partially apply by specifying all the non-interactive parameters
+        plot_params = (args, kwargs) # these names have special meanings, so store them under a different name
+        plot = lambda param, trial_num, latent: \
+            plot_trial_1D(rec, param, trial_num, *plot_params[0], plot_in_latent_space=latent, **plot_params[1])
+        # store the plots so they only have to be rendered once
+        memoised = tg.PlotMemoization(plot)
+
+        # updated by the widgets, or left alone if not None
+        def update_plot(param, trial_num):
+            key = (param, trial_num)
+            if None not in key: # all args set
+                latent = param.startswith('latent_')
+                param = param[len('latent_'):] if latent else param
+                memoised.show(key, {'param': param, 'trial_num': trial_num, 'latent': latent})
+
+        if param is None:
+            params = [b[0] for b in opt.bounds.ordered]
+            params = params + [b[0] for b in opt.latent_space.get_latent_bounds().ordered if b[0] not in params]
+            param = tg.dropdown(params, description='Param:', initial=0)
+        else:
+            param = tg.widgets.fixed(param)
+
+        if trial_num is None:
+            trial_num = tg.slider(opt.rt.finished_trials, description='Trial:', initial=-1)
+        else:
+            trial_num = tg.widgets.fixed(trial_num)
+
+        tg.widgets.interact(update_plot, param=param, trial_num=trial_num)
+    else:
+        plot_trial_1D(rec, param, trial_num, *args, **kwargs)
+
+
+
+def plot_trial_1D(rec, param, trial_num, true_objective=None,
+                  plot_in_latent_space=True, divisions=200, n_sigma=2,
+                  predict_through_all=True, log_scale=False, fig=None):
     r'''Plot the state of Bayesian optimisation (perturbed along a single
     parameter) at the time that the given trial was starting its evaluation.
 
@@ -58,19 +104,14 @@ def plot_trial_1D(rec, param=None, trial_num=None, true_objective=None,
     point to test to show how the acquisition function varies along that
     dimension. The same holds for higher dimensions but is harder to visualise.
 
-    Note:
-        `param` and `trial_num` may both be `None` at the same time, in which
-        case both will be chosen interactively.
-
     Args:
         rec (PlottingRecorder): the recorder which observed the run of an optimiser
         param (str): the name of the parameter to perturb to obtain the graph.
-            None => choose interactively
         trial_num (int): the number of the trial to plot.
-            None => choose interactively
             <0 => index from the end/last trial
         true_objective: true objective function (or array of pre-computed cost
             values corresponding to the number of divisions) (None to omit)
+        plot_in_latent_space: whether to plot in latent space or input space
         divisions (int): the resolution of the plot / number of points along the
             parameter domain to plot at. (higher => slightly better quality but
             takes longer to render)
@@ -86,33 +127,8 @@ def plot_trial_1D(rec, param=None, trial_num=None, true_objective=None,
         log_scale: whether to use a log scale for the `x` axis
         fig: the matplotlib figure to plot onto
     '''
-
-    # choose interactively
-    if param is None or trial_num is None:
-        opt = rec.optimiser
-        # partially apply by specifying all the non-interactive parameters
-        plot = lambda param, trial_num: plot_trial_1D(rec, param, trial_num,
-                true_objective, divisions, n_sigma, predict_through_all, log_scale)
-        # store the plots so they only have to be rendered once
-        memoised = tg.PlotMemoization(plot)
-        # updated by the widgets, or left alone if not None
-        args = {'param' : param, 'trial_num' : trial_num}
-        def arg_changed(name, val):
-            args[name] = val
-            key = (args['param'], args['trial_num'])
-            if None not in key: # all args set
-                memoised.show(key, args)
-
-        if param is None:
-            params = [b[0] for b in opt.bounds.ordered]
-            callback = lambda val: arg_changed('param', val)
-            tg.dropdown(params, callback, description='Param:', initial=0)
-
-        if trial_num is None:
-            callback = lambda val: arg_changed('trial_num', val)
-            tg.slider(opt.rt.finished_trials, callback, description='Trial:', initial=-1)
-
-        return
+    # to catch errors where the user mistakes this for the interactive version
+    assert param is not None and trial_num is not None, 'param and trial_num must be specified'
 
     ################
     # Extract Data
@@ -125,23 +141,34 @@ def plot_trial_1D(rec, param=None, trial_num=None, true_objective=None,
     assert trial_num >= 0 and trial_num < rt.max_trials, 'invalid iteration number'
     assert opt.async_eval is None, 'this function does not support asynchronous optimisation runs'
 
-    param_range = opt.latent_space.evenly_spaced_range(param, divisions)
-    latent_range = opt.latent_space.evenly_spaced_range(param, divisions)
-    param_index = opt.bounds.get_param_index(param)
+    if plot_in_latent_space:
+        # linear in the latent space, transform this back to get the points in the input space
+        latent_range = opt.latent_space.linear_latent_range(param, divisions) # the input space range
+        input_range = np.array([opt.latent_space.param_from_latent(param, p) for p in latent_range])
+        plot_range = latent_range # the x axis of the plot
+    else:
+        # linear in the input space, transform this to get the points in the latent space
+        input_range = np.linspace(*opt.bounds.get(param), num=divisions) # the input space range
+        latent_range = np.array([opt.latent_space.param_to_latent(param, p) for p in input_range])
+        plot_range = input_range # the x axis of the plot
 
     # f_ => finished trial data
     # _xs => latent space point containing all parameter values
-    # _ps => value for the chosen parameter _only_ (in the input (unwarped) space)
+    # _ps => value for the chosen parameter _only_
     finished, trial = rec.get_data_for_trial(trial_num)
 
     if trial.extra_data['type'] == 'pre_phase':
         print('pre-phase trial {}'.format(trial_num))
         return # TODO
 
+    param_index = opt.bounds.get_param_index(param)
     f_xs = [f.x for f in finished]
-    f_ps = [opt.latent_space.from_latent(p)[param_index] for p in f_xs]
+    f_ps = [x[param_index] for x in f_xs]
     f_ys = [f.y for f in finished]
-    trial_p = opt.latent_space.from_latent(trial.x)[param_index]
+    trial_p = trial.x[param_index]
+    if not plot_in_latent_space:
+        f_ps = [opt.latent_space.param_from_latent(param, p) for p in f_ps]
+        trial_p = opt.latent_space.param_from_latent(param, trial_p)
     # _i => index
     best_i = np.argmax(f_ys) if opt.is_maximising() else np.argmin(f_ys)
 
@@ -181,11 +208,11 @@ def plot_trial_1D(rec, param=None, trial_num=None, true_objective=None,
     if true_objective is not None:
         # true cost is either the cost function, or pre-computed costs as an array
         if callable(true_objective):
-            true_ys = [true_objective(v) for v in param_range]
+            true_ys = [true_objective(v) for v in input_range]
         else:
-            assert len(true_objective) == len(param_range)
+            assert len(true_objective) == divisions
             true_ys = true_objective
-        ax1.plot(param_range, true_ys, '--', color='#2f2f2f',
+        ax1.plot(plot_range, true_ys, '--', color='#2f2f2f',
                  label='true objective', linewidth=1.0, alpha=0.6)
 
     ### Plot Samples
@@ -209,8 +236,9 @@ def plot_trial_1D(rec, param=None, trial_num=None, true_objective=None,
         else:
             mu_label, sigma_label = (None, None)
         mu_alpha, sigma_alpha = alphas
-        l = ax1.plot(param_range, mus, '-', color='#b544ee', label=mu_label, alpha=mu_alpha, linewidth=1.0)
-        ax1.fill_between(param_range, mus - n_sigma*sigmas, mus + n_sigma*sigmas,
+        l = ax1.plot(plot_range, mus, '-', color='#b544ee', label=mu_label, alpha=mu_alpha, linewidth=1.0)
+
+        ax1.fill_between(plot_range, mus - n_sigma*sigmas, mus + n_sigma*sigmas,
                          alpha=sigma_alpha, color='#c465f3',
                          label=sigma_label)
 
@@ -237,13 +265,13 @@ def plot_trial_1D(rec, param=None, trial_num=None, true_objective=None,
     #################################
     # Plotting Acquisition Function
     #################################
-    ax2.set_xlabel('parameter {}'.format(param))
+    ax2.set_xlabel('parameter {}{}'.format(param, ' (latent space)' if plot_in_latent_space else ''))
     ax2.set_ylabel('{}({})'.format(acq_fun.get_name(), param))
     ax2.set_title('Acquisition Function ({})'.format(acq_fun.get_name()))
 
-    ax2.plot(param_range, trial_ac, '-', color='g', linewidth=1.0,
+    ax2.plot(plot_range, trial_ac, '-', color='g', linewidth=1.0,
              label='acquisition function')
-    ax2.fill_between(param_range, np.zeros_like(param_range), trial_ac,
+    ax2.fill_between(plot_range, np.zeros_like(plot_range), trial_ac,
                      alpha=0.3, color='palegreen')
 
     ax2.axvline(x=trial_p, linewidth=bar_width, color=bar_color)

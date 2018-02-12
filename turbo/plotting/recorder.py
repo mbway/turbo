@@ -24,9 +24,17 @@ class PlottingRecorder(tm.Listener):
             self.y = None
             self.extra_data = None
 
-    def __init__(self):
+    def __init__(self, optimiser=None):
+        '''
+        Args:
+            optimiser: (optional) the optimiser to register with, otherwise
+                `Optimiser.register_listener()` should be called with this
+                object as an argument in order to receive messages.
+        '''
         self.trials = {}
-        self.optimiser = None
+        self.optimiser = optimiser
+        if optimiser is not None:
+            optimiser.register_listener(self)
 
     def registered(self, optimiser):
         assert self.optimiser is None or self.optimiser == optimiser, \
@@ -49,7 +57,12 @@ class PlottingRecorder(tm.Listener):
         t.y = y
 
 
+
     # Utility functions
+
+    def get_sorted_trials(self):
+        ''' return a list of (trial_num, Trial) sorted by trial_num (and so sorted by start time) '''
+        return sorted(self.trials.items())
 
     def get_data_for_trial(self, trial_num):
         #TODO: for async cannot assume that finished == all trials before trial_num

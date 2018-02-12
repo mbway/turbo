@@ -163,14 +163,14 @@ class PlotMemoization:
         self.saved.clear()
 
 
-def slider(values, function, description=None, initial=0):
+def slider(values, function=None, description=None, initial=0):
     '''A utility for easily setting up a Jupyter slider for items of a list
 
     Args:
         values (int or list): either a list of items for the slider value to
             correspond to, or an integer, in which case the values will be the
             range from 0 to `values`
-        function: a function which takes an item of `values` as an argument
+        function: (optional) a function which takes an item of `values` as an argument
         description (str): the description/label to apply to the slider
         initial (int): the index of the initial value
     '''
@@ -182,15 +182,16 @@ def slider(values, function, description=None, initial=0):
     slider = widgets.IntSlider(value=initial, min=0, max=len(values)-1,
                 continuous_update=False, layout=widgets.Layout(width='100%'))
     slider.description = description
-    widgets.interact(lambda i: function(values[i]), i=slider)
+    if function is not None:
+        widgets.interact(lambda i: function(values[i]), i=slider)
     return slider
 
-def dropdown(values, function, description=None, initial=0):
+def dropdown(values, function=None, description=None, initial=0):
     '''A utility for easily setting up a Jupyer dropdown with the given values
 
     Args:
         values: a list of the possible dropdown values
-        function: a function which takes the current selected value as an argument
+        function: (optional) a function which takes the current selected value as an argument
         description (str): the label to give to the dropdown
         initial (Int): an index into the values list to give initially
     '''
@@ -199,6 +200,7 @@ def dropdown(values, function, description=None, initial=0):
         value=values[initial],
         description=description
     )
-    widgets.interact(lambda val: function(val), val=dropdown)
+    if function is not None:
+        widgets.interact(lambda val: function(val), val=dropdown)
     return dropdown
 

@@ -6,14 +6,13 @@ import matplotlib.ticker as ticker
 
 #TODO: plot objective function value over time. Should this file be named something different?
 
-#TODO: should a plotting recorder be required instead of having this as a special case? perhaps overload?
-def plot_error_over_time(opt, true_best, log_scale=False, plot_best=True, fig_ax=None):
+def plot_error_over_time(rec, true_best, log_scale=False, plot_best=True, fig_ax=None):
     '''
     plot a line graph showing the difference between the known optimal value
     and the optimiser's best guess at each step.
 
     Args:
-        opt (Optimiser): the optimiser with the data to plot
+        rec (PlottingRecorder): the recorder which observed the run of an optimiser
         true_best (float): the globally optimal value to compare to
         log_scale: whether to plot on a logarithmic or a linear scale
         plot_best: whether to plot a marker showing the trial with the overall best cost
@@ -21,20 +20,20 @@ def plot_error_over_time(opt, true_best, log_scale=False, plot_best=True, fig_ax
     '''
     fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=(10, 4)) # inches
 
-    rt = opt.rt
-    rt.check_consistency()
-    n = rt.finished_trials
-    xs = range(1, n+1)
-    errors = [(true_best - s if opt.is_maximising() else s - true_best)
-              for s in rt.trial_ys]
-    assert errors, 'no trials'
+    trials = rec.get_sorted_trials()
+    xs = [n for n, t in trials]
+    errors = [(true_best - t.y if rec.optimiser.is_maximising() else t.y - true_best)
+              for n, t in trials]
+    colors = ['#4c72b0' if t.extra_data['type'] == 'bayes' else 'violet' for n, t in trials]
 
+    assert errors, 'no trials'
     if any(e < 0 for e in errors):
         print('warning: some of the trials are better than true_best!')
 
     ax.margins(0.01, 0.05)
     ax.axhline(y=0, linestyle='--', color='grey', linewidth=0.8)
-    ax.plot(xs, errors, marker='o', markersize=4, color='#4c72b0', label='error')
+    ax.plot(xs, errors, color='#4c72b0', label='error')
+    ax.scatter(xs, errors, s=16, color=colors, zorder=10)
 
     if plot_best:
         best_i = np.argmin(errors)
@@ -50,15 +49,16 @@ def plot_error_over_time(opt, true_best, log_scale=False, plot_best=True, fig_ax
         ax.margins(0.01, 0.1) # need more margins to fit the marker in
 
     ax.set_title('Error Over Time', fontsize=14)
-    ax.set_xlabel('Trials')
-    ax.set_ylabel('Error')
+    ax.set_xlabel('trial num')
+    ax.set_ylabel('error')
 
     if log_scale:
         ax.set_yscale('log')
 
-    if n < 50:
+    if len(xs) < 50:
         ax.xaxis.set_major_locator(ticker.MultipleLocator(2.0))
-    elif n < 100:
+    elif len(xs) < 100:
         ax.xaxis.set_major_locator(ticker.MultipleLocator(5.0))
     ax.legend()
+
 
