@@ -5,7 +5,9 @@ API
     :toctree: _autosummary
 
     turbo
+    turbo.bounds
     turbo.gui
+    turbo.gui.cli
     turbo.gui.jupyter
     turbo.modules
     turbo.modules.acquisition_functions
@@ -16,8 +18,12 @@ API
     turbo.modules.plan
     turbo.modules.surrogates
     turbo.optimiser
+    turbo.optimiser_presets
     turbo.plotting
-    turbo.plotting.basic
+    turbo.plotting.error
+    turbo.plotting.plot_3D
+    turbo.plotting.recorder
+    turbo.plotting.surrogates
     turbo.plotting.trials
     turbo.utils
 
