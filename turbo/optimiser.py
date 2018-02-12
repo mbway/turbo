@@ -4,106 +4,76 @@
 
 import numpy as np
 
-class Bounds:
-    '''Boundaries of a space
-    '''
-    def __init__(self, ordered):
-        #TODO: do checks like duplicates etc
-        self.ordered = ordered
-        self.params = set([b[0] for b in ordered])
-        self.associative = {b[0] : (b[1], b[2]) for b in ordered}
-    def __len__(self):
-        return len(self.ordered)
-    def get(self, param):
-        return self.associative[param]
-    def get_param_index(self, param):
-        '''Get the index within a point where the value for the given parameter
-        can be found.
-
-        For example, given a point `p`:
-        `opt.point_to_config(p)[param] == p[opt.bounds.get_param_index(param)]`
-
-        '''
-        for i, b in enumerate(self.ordered):
-            if param == b[0]:
-                return i
-        raise KeyError()
-
-class OptimiserRuntime:
-    def __init__(self):
-        self.running = False
-        self.started_trials = 0
-        self.finished_trials = 0
-        self.max_trials = 0
-        self.trial_xs = [] # list of row vectors
-        self.trial_ys = [] # list of scalars
-        self.last_model_params = None
-
-    def check_consistency(self):
-        '''check that the optimiser runtime data makes sense
-
-        Raises:
-            AssertionError
-        '''
-        assert self.started_trials >= self.finished_trials
-        assert len(self.trial_xs) == len(self.trial_ys)
-        assert len(self.trial_ys) == self.finished_trials
+# local imports
+from .bounds import Bounds
+from .optimiser_presets import load_optimiser_preset
 
 
 class Optimiser:
-    def __init__(self, objective, desired_extremum, bounds):
+    def __init__(self, objective, desired_extremum, bounds, settings_preset='default'):
+        '''
+        Args:
+            objective: a function to be optimised, which accepts parameters
+                corresponding to the given bounds and returns an objective/cost
+                value for the input.
+            desired_extremum: either 'min' or 'max' specifying whether the
+                objective function is to be maximised or minimised
+            bounds: a list of tuples of (name, min, max) for each parameter of
+                the objective function
+            preset: the name of the preset optimiser settings to load with
+                `load_optimiser_preset()`. Pass None to leave the optimiser
+                uninitialised for full customisation.
+        '''
         self.objective = objective
         #TODO: internally, should use is_maximising or is_minimising where possible
         assert desired_extremum in ('min', 'max'), 'desired_extremum must be either "min" or "max"'
         self.desired_extremum = desired_extremum
         self.bounds = Bounds(bounds)
 
+        # modules
         self.latent_space = None
         self.plan = None
         self.pre_phase_select = None
         self.maximise_acq = None
         self.async_eval = None
         self.parallel_strategy = None
-
         self.surrogate_factory = None
         self.acq_func_factory = None
 
+        # runtime data kept separate from configuration data
+        self.rt = Optimiser.Runtime()
         # shouldn't be accessed directly, but through the `register_listener()`
         # and `unregister_listener()` methods
         self._listeners = []
 
-        # runtime data
-        self.rt = OptimiserRuntime()
+        if settings_preset is not None:
+            load_optimiser_preset(self, settings_preset)
 
-    def load_settings(self, settings):
-        #TODO: this could be the mechanism for setting defaults. Have provided defaults dictionaries which can be loaded?
-        #TODO: no duplicate names in bounds
-        pass
+    class Runtime:
+        ''' holds the data for an optimisation run '''
+        def __init__(self):
+            self.running = False
+            self.started_trials = 0
+            self.finished_trials = 0
+            self.max_trials = 0
+            self.trial_xs = [] # list of row vectors
+            self.trial_ys = [] # list of scalars
+            self.last_model_params = None
 
-    def point_to_config(self, point):
-        num_params = len(self.bounds)
-        assert point.shape == (num_params,) or point.shape == (1, num_params), \
-            'invalid point shape: {}'.format(point.shape)
+        def check_consistency(self):
+            '''check that the optimiser runtime data makes sense
 
-        config = {}
-        for i in range(num_params):
-            name = self.bounds.ordered[i][0]
-            config[name] = point[i]
-        return config
+            Raises:
+                AssertionError
+            '''
+            assert self.started_trials >= self.finished_trials
+            assert len(self.trial_xs) == len(self.trial_ys)
+            assert len(self.trial_ys) == self.finished_trials
 
-    def config_to_point(self, config):
-        assert set(config.keys()) == self.bounds.params, 'invalid configuration'
-        point = []
-        for b in self.bounds.ordered:
-            name = b[0]
-            point.append(config[name])
-        return np.array(point)
-
-
-    def is_maximising(self):
-        return self.desired_extremum == 'max'
-    def is_minimising(self):
-        return self.desired_extremum == 'min'
+        def add_finished_trial(self, x, y):
+            self.trial_xs.append(x)
+            self.trial_ys.append(y)
+            self.finished_trials += 1
 
     def _check_settings(self):
         ''' check that the current optimiser settings make sense
@@ -111,7 +81,25 @@ class Optimiser:
         Raises:
             AssertionError
         '''
-        pass
+        pass#TODO
+
+    def _point_to_dict(self, point):
+        ''' convert the given point (array of values) to a dictionary of parameter names to values
+
+        Note:
+            the point should reside in the input space, not the latent space if
+            the dictionary is to be fed to the objective function.
+        '''
+        num_params = len(self.bounds)
+        assert point.shape == (num_params,) or point.shape == (1, num_params), \
+            'invalid point shape: {}'.format(point.shape)
+        point = point.flatten()
+        return {self.bounds.ordered[i][0] : point[i] for i in range(num_params)}
+
+    def is_maximising(self):
+        return self.desired_extremum == 'max'
+    def is_minimising(self):
+        return self.desired_extremum == 'min'
 
     def register_listener(self, listener):
         assert listener not in self._listeners
@@ -135,9 +123,10 @@ class Optimiser:
         for l in self._listeners:
             getattr(l, event)(*args)
 
-    def restart(self):
-        self.rt = OptimiserRuntime()
-
+    def reset(self):
+        ''' clear the runtime data but keep the optimiser configuration the same '''
+        self.rt = Optimiser.Runtime()
+        self._listeners = []
 
     def get_incumbent(self):
         '''get the current best trial
@@ -165,13 +154,8 @@ class Optimiser:
             raise NotImplementedError('unsupported acquisition function type: {}'.format(acq_type))
         return self.acq_func_factory(*acq_args)
 
-
     def _select_trial(self, trial_num):
-        ''' Get the next input to evaluate
-
-        Returns:
-            The next trial
-        '''
+        ''' Get the next input to evaluate '''
         rt = self.rt
         lb = self.latent_space.get_latent_bounds()
 
@@ -189,14 +173,13 @@ class Optimiser:
             x, ac_x = self.maximise_acq(lb, acq)
             selection_details = {'type': 'bayes', 'ac_x': ac_x, 'model': model}
         self._notify('selection_finished', trial_num, x, selection_details)
-
         return x
 
 
     def run(self, max_trials):
         ''' Run the Bayesian optimisation for the given number of trials
         '''
-        self.latent_space.set_bounds(self.bounds)
+        self.latent_space.set_input_bounds(self.bounds)
         self._check_settings()
         rt = self.rt # runtime data
         rt.running = True
@@ -207,16 +190,14 @@ class Optimiser:
             trial_num = rt.started_trials
 
             x = self._select_trial(trial_num)
-            config = self.point_to_config(self.latent_space.from_latent(x))
+            params_dict = self._point_to_dict(self.latent_space.from_latent(x))
             self._notify('eval_started', trial_num)
 
             rt.started_trials += 1
-            y = self.objective(**config)
+            y = self.objective(**params_dict)
             #TODO: assert that y is the correct type and not None, NaN or infinity
 
-            rt.trial_xs.append(x)
-            rt.trial_ys.append(y)
-            rt.finished_trials += 1
+            rt.add_finished_trial(x, y)
             self._notify('eval_finished', trial_num, y)
             rt.check_consistency()
 
@@ -263,6 +244,8 @@ class Optimiser:
         trial_xs.extend(xs)
         trial_ys.extend(ys)
     '''
+
+
 
 
 

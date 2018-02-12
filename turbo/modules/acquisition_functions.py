@@ -84,12 +84,17 @@ class UCB(AcquisitionFunction):
     .. math::
         \begin{align*}
         UCB(\mathbf{x})&=\mu(\mathbf{x})+\beta\sigma(\mathbf{x})\\
-        LCB(\mathbf{x})&=-(\mu(\mathbf{x})-\beta\sigma(\mathbf{x}))
+        -LCB(\mathbf{x})&=-(\mu(\mathbf{x})-\beta\sigma(\mathbf{x}))
         \end{align*}
 
     Note:
-        Technically this function is the negative lower confidence bound when
-        minimising the objective function; however, the name UCB is used for
+        since the acquisition function is always maximised, when minimising the
+        objective function the *negative* lower confidence bound is used.
+
+    Note:
+        Although technically UCB refers only to the maximisation version of the
+        acquisition function, the name UCB is more common in the literature and
+        so used over something more generic like 'confidence_bound' for
         simplicity.
     '''
     def __init__(self, model, desired_extremum, beta):
@@ -172,7 +177,7 @@ class PI(AcquisitionFunction):
     Where:
 
     - :math:`MAX=1` when maximising and 0 when minimising
-    - when maximising :math:`\mathbf x^+=\arg\max_{\mathbf x\in\mathbf x_{1:t}}\mathbb f(\mathbf x)` (ie the best trial so far)
+    - when maximising :math:`\mathbf x^+=\arg\max_{\mathbf x\in\mathbf x_{1:t}}\mathbb f(\mathbf x)` (ie the best trial so far) where :math`\mathbb f` is the true objective function.
 
     Note:
         This acquisition function is similar to EI in that they are both
@@ -187,9 +192,9 @@ class PI(AcquisitionFunction):
             model: the surrogate model fitted to the past trials.
             desired_extremum: `'max' =>` higher cost is better, `'min' =>` lower
                 cost is better.
+            incumbent_cost: the current best cost/objective function value for a finished trial
             xi: a parameter >0 for exploration/exploitation trade-off. Larger =>
                 more exploration.
-            incumbent_cost: the current best cost/objective function value for a finished trial
         '''
         super().__init__(model, desired_extremum)
         self.incumbent_cost = incumbent_cost
@@ -216,12 +221,12 @@ class PI(AcquisitionFunction):
         # minimisation:
         #     -(mu(x) - (f(x+) - xi))  =  f(x+) - mu(x) - xi
         diff = self.scale_factor * (mus[mask] - self.incumbent_cost) - self.xi
+        # Zs is only defined where sigmas != 0 so may have shorter length
+        Zs = diff / sigmas
 
-        Zs = np.zeros_like(mus)
-        Zs[mask] = diff / sigmas
-        Zs = norm.cdf(Zs)
-
-        return Zs
+        PIs = np.zeros_like(mus)
+        PIs[mask] = norm.cdf(Zs)
+        return PIs
 
 
     class Factory(AcquisitionFunction.Factory):
@@ -242,3 +247,112 @@ class PI(AcquisitionFunction):
             return PI(model, desired_extremum, incumbent_cost, xi)
 
 
+class EI(AcquisitionFunction):
+    r'''Expected Improvement Acquisition function
+
+    Expected Improvement is related to probability of improvement in that they
+    both compare points with the incumbent (best) trial, making them both
+    improvement based acquisition functions. However EI is vastly superior to PI
+    (which unlike EI is prone to over exploitation and not enough exploration)
+    because EI takes the value/amount of improvement over the incumbent into
+    account in addition to the probability of that improvement, whereas PI
+    treats all amounts of improvement the same.
+
+    Note:
+        the formulas shown here are for the case of maximisation.
+
+    .. math::
+        EI(\mathbf x)=\mathbb E\left[max(0,\; f(\mathbf x)-f(\mathbf x^+))\right]
+
+    Where :math:`f` is the *surrogate* objective function and :math:`\mathbf x^+` is the
+    parameter values for the best known (incumbent) trial.
+
+    If :math:`f` is a Gaussian Process then EI can be calculated analytically:
+
+    .. math::
+        EI(\mathbf x)=\begin{cases}
+        \left(\mu(\mathbf x)-f(\mathbf x^+)\right)\mathbf\Phi(Z) \;+\; \sigma(\mathbf x)\phi(Z)  &  \text{if } \sigma(\mathbf x)>0\\
+        0 & \text{if } \sigma(\mathbf x) = 0
+        \end{cases}
+
+    .. math::
+        Z=\frac{\mu(\mathbf x)-f(\mathbf x^+)}{\sigma(\mathbf x)}
+
+    Where
+
+    - :math:`\phi(\cdot)=` standard multivariate normal distribution PDF (ie :math:`\boldsymbol\mu=\mathbf 0,\;\Sigma=I`)
+    - :math:`\Phi(\cdot)=` standard multivariate normal distribution CDF
+
+    a parameter :math:`\xi` can be introduced to control the
+    exploitation-exploration trade-off (:math:`\xi=0.01` works well in 'almost
+    all cases' (Lizotte, 2008))
+
+    .. math::
+        EI(\mathbf x)=\begin{cases}
+        \left(\mu(\mathbf x)-f(\mathbf x^+)-\xi\right)\mathbf\Phi(Z) \;+\; \sigma(\mathbf x)\phi(Z)  &  \text{if } \sigma(\mathbf x)>0\\
+        0 & \text{if } \sigma(\mathbf x) = 0
+        \end{cases}
+
+    .. math::
+        Z=\frac{\mu(\mathbf x)-f(\mathbf x^+)-\xi}{\sigma(\mathbf x)}
+
+    '''
+    def __init__(self, model, desired_extremum, incumbent_cost, xi):
+        '''
+        Args:
+            model: the surrogate model fitted to the past trials.
+            desired_extremum: `'max' =>` higher cost is better, `'min' =>` lower
+                cost is better.
+            incumbent_cost: the current best cost/objective function value for a finished trial
+            xi: a parameter >0 for exploration/exploitation trade-off. Larger =>
+                more exploration.
+        '''
+        super().__init__(model, desired_extremum)
+        self.incumbent_cost = incumbent_cost
+        self.xi = xi
+        self.scale_factor = 1 if desired_extremum == 'max' else -1
+
+    def get_name(self):
+        return 'EI'
+
+    def __call__(self, X):
+        '''
+        Args:
+            X: the array of points to evaluate at. `shape=(num_points, num_attribs)`
+        '''
+        mus, sigmas = self.model.predict(X, return_std_dev=True)
+
+        # using masks is slightly faster than ignoring the division by zero errors
+        # then fixing later. It also seems like a 'cleaner' approach.
+        mask = sigmas != 0 # sigma_x = 0  =>  PI(x) = 0
+        sigmas = sigmas[mask]
+
+        # maximisation:
+        #     mu(x) - (f(x+) + xi)     =  mu(x) - f(x+) - xi
+        # minimisation:
+        #     -(mu(x) - (f(x+) - xi))  =  f(x+) - mu(x) - xi
+        diff = self.scale_factor * (mus[mask] - self.incumbent_cost) - self.xi
+        # Zs is only defined where sigmas != 0 so may have shorter length
+        Zs = diff / sigmas
+
+        EIs = np.zeros_like(mus)
+        EIs[mask] = diff * norm.cdf(Zs)  +  sigmas * norm.pdf(Zs)
+        return EIs
+
+
+    class Factory(AcquisitionFunction.Factory):
+        def __init__(self, xi):
+            '''
+            Args:
+                xi: either a constant float or a function which takes the trial
+                    number and returns a float
+            '''
+            self.xi = xi
+
+        def get_type(self):
+            return 'improvement'
+
+        def __call__(self, trial_num, model, desired_extremum, incumbent_cost):
+            # xi can be a function or a constant
+            xi = self.xi(trial_num) if callable(self.xi) else self.xi
+            return PI(model, desired_extremum, incumbent_cost, xi)
