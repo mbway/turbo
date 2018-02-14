@@ -48,9 +48,6 @@ class AcquisitionFunction:
         functions can be configured. The optimiser then uses the factory to
         generate acquisition functions specialised to the current iteration.
         '''
-        def reset(self):
-            pass # nothing to do
-
         def get_type(self):
             ''' get the type of acquisition function that this factory constructs
 

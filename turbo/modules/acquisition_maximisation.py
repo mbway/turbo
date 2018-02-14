@@ -7,7 +7,7 @@ import scipy.optimize
 
 # local modules
 from .naive_selectors import random_selector
-from turbo.utils import row2D, WarningCatcher
+from turbo.utils import row2D
 
 class random_quasi_newton:
     def __init__(self, num_random=1000, grad_restarts=10, start_from_best=2):
@@ -29,17 +29,6 @@ class random_quasi_newton:
         assert start_from_best <= num_random
         assert start_from_best <= grad_restarts
 
-    def reset(self):
-        pass # nothing to do
-
-    def on_warning(self, warning):
-        '''Called when the BFGS optimiser raises a warning.
-
-        By default no action is taken. Could instead call
-        `turbo.utils.print_warning(warning)` to print instead.
-        '''
-        pass
-
     def __call__(self, latent_bounds, acq):
         '''
         Returns:
@@ -57,6 +46,7 @@ class random_quasi_newton:
         # keep track of the current best
         best_x = None
         best_y = inf
+        maximisation_info = {}
 
         # minimise by random sampling
         if self.num_random > 0:
@@ -105,16 +95,21 @@ class random_quasi_newton:
             # performance. Between 0.1s and 4s in my testing and although it does
             # increase as the optimisation progresses, the trend appears to be
             # sub-linear.
+            all_warnings = []
             for j in range(self.grad_restarts):
-                with WarningCatcher(self.on_warning):
+                with warnings.catch_warnings(record=True) as ws:
                     res_x, res_y = bfgs(j)
+                all_warnings.extend(ws)
 
                 if res_y is not None and res_y < best_y:
                     best_x = res_x # shape=(num_attribs,)
                     best_y = res_y # shape=(1,1)
 
+        if len(all_warnings) > 0:
+            maximisation_info.update({'warnings' : all_warnings})
+
         if best_x is None:
-            return None, -inf
+            best_y = -inf
         else:
             best_x = row2D(best_x) # shape=(1, num_attribs)
             # ensure that the chosen value lies within the bounds (which may not
@@ -122,4 +117,5 @@ class random_quasi_newton:
             low_bounds, high_bounds = zip(*bounds)
             best_x = np.clip(best_x, low_bounds, high_bounds)
             best_y = -np.asscalar(best_y) # undo negation
-            return best_x, best_y
+
+        return best_x, best_y, maximisation_info

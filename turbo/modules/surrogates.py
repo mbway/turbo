@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import warnings
 import numpy as np
 
 try:
@@ -87,9 +88,6 @@ class Surrogate(object):
         be configured. The optimiser then uses the factory to generate and train
         a new model each iteration.
         '''
-        def reset(self):
-            ''' called when the optimiser is reset '''
-            raise NotImplementedError()
         def __call__(self, trial_num, X, y):
             ''' instantiate a new surrogate model
 
@@ -100,9 +98,12 @@ class Surrogate(object):
 
 
 class SciKitGPSurrogate(Surrogate):
-    def __init__(self, gp_params):
-        self.gp_params = gp_params
-        self.model = sk_gp.GaussianProcessRegressor(**self.gp_params)
+    '''A surrogate model which uses a `GaussianProcessRegressor` from scikit learn
+
+    Note: see http://scikit-learn.org/stable/modules/generated/sklearn.gaussian_process.GaussianProcessRegressor.html
+    '''
+    def __init__(self, **kwargs):
+        self.model = sk_gp.GaussianProcessRegressor(**kwargs)
 
     def fit(self, X, y, hyper_params_hints=None, fixed_hyper_params=None):
         assert fixed_hyper_params is None or hyper_params_hints is None, \
@@ -155,39 +156,56 @@ class SciKitGPSurrogate(Surrogate):
             # 1, and therefore can fit better to data of different scales.
             # nu=1.5 assumes the target function is once-differentiable
             # WhiteKernel assumes that the objective function contains some noise
-            'kernel' : 1.0 * sk_gp.kernels.Matern(nu=1.5) + sk_gp.kernels.WhiteKernel(),
+            'kernel' : 1.0 * sk_gp.kernels.Matern(nu=2.5) + sk_gp.kernels.WhiteKernel(),
             'n_restarts_optimizer' : 10,
             # make a copy of the training data (in-case it is modified)
-            'copy_X_train' : True
+            'copy_X_train' : True,
+            'normalize_y' : False
         }
 
-        def __init__(self, gp_params=None, train_interval=0, hint_with_last_hyper_params=True):
+        def __init__(self, gp_params=None, variable_iterations=None, hint_with_last_hyper_params=True):
             '''
             Args:
-                gp_params (dict): parameters to pass to scikit
+                gp_params (dict): parameters to pass to the `GaussianProcessRegressor` constructor
                     see: http://scikit-learn.org/stable/modules/generated/sklearn.gaussian_process.GaussianProcessRegressor.html
-                surrogate_train_interval: how often to optimise the hyperparameters
-                    of the surrogate model. 0 => every iteration. When not training,
-                    the hyperparameters are reused from the last time they were
-                    trained.
+                variable_iterations: a function from `trial_num` to the number of
+                    training iterations to use for fitting the model for this trial. If
+                    provided, this supersedes `n_restarts_optimizer` from
+                    `gp_params`.
+
+                    If the function returns 0 then then no training
+                    is performed and the hyperparameters are fixed to either the
+                    last model's parameters or those defined in `gp_params`
+                    (depending on the value of `hint_with_last_hyper_params`).
+
+                    If the function returns `n>0` then
+                    `n_restarts_optimizer=n-1` is used (note that
+                    `n_restarts_optimizer=0` means that 1 iteration is
+                    performed).
+
+                    Use cases for this parameter include not training every
+                    iteration and instead copying the hyperparameters forward.
+                    Alternatively, few iterations can be used for most trials,
+                    then occasionally more can be used.
+
+                    Example:
+                        `lambda trial_num: 4 if (trial_num-pre_phase) % 3 == 0 else 1`
+                        will generate the sequence 4,1,1,4,1,1,4,...
+                        starting with 4 on the first trial after the pre-phase
+
+                    Example:
+                        `lambda trial_num: [10,5,2][(trial_num-pre_phase) % 3]`
+                        will generate a sequence of repeating 10,5,2,10,5,2,...
                 hint_with_last_hyper_params: whether to use the last trained
                     surrogate hyperparameters as a starting point when optimising
                     them the next time.
             '''
             assert sk_gp is not None, 'failed to import sklearn.'
             self.gp_params = self.default_params if gp_params is None else gp_params
-            self.train_interval = train_interval
+            self.variable_iterations = variable_iterations
             self.hint_with_last_hyper_params = hint_with_last_hyper_params
-            self._last_trained = -1
-            self._last_model_params = None
 
-        def reset(self):
-            self._last_trained = -1
             self._last_model_params = None
-
-        def _should_train_model(self, trial_num):
-            trials_since = trial_num - self._last_trained - 1
-            return self._last_trained == -1 or trials_since >= self.train_interval
 
         def _get_hyper_params_hints(self):
             if self.hint_with_last_hyper_params:
@@ -196,15 +214,24 @@ class SciKitGPSurrogate(Surrogate):
                 return None
 
         def __call__(self, trial_num, X, y):
-            model = SciKitGPSurrogate(self.gp_params)
-            train = self._should_train_model(trial_num)
-            fitting_info = {'trained': train}
-            if train:
+            model = SciKitGPSurrogate(**self.gp_params)
+
+            iterations = self.variable_iterations(trial_num) if self.variable_iterations is not None \
+                else model.model.n_restarts_optimizer + 1
+            assert iterations >= 0, 'invalid number of iterations: {}'.format(iterations)
+
+            fitting_info = {'iterations': iterations}
+
+            if iterations > 0:
+                model.model.n_restarts_optimizer = iterations - 1
                 hints = self._get_hyper_params_hints()
-                model.fit(X, y, hyper_params_hints=hints)
-                self._last_trained = trial_num
+                with warnings.catch_warnings(record=True) as ws:
+                    model.fit(X, y, hyper_params_hints=hints)
                 self._last_model_params = model.get_hyper_params()
                 fitting_info.update({'hints': hints})
+                if len(ws) > 0:
+                    fitting_info.update({'warnings': [w.message for w in ws]})
+
             else:
                 model.fit(X, y, fixed_hyper_params=self._last_model_params)
                 fitting_info.update({'re_used': (self._last_trained, self._last_model_params)})

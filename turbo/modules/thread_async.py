@@ -6,9 +6,6 @@ class ThreadAsync(interfaces.async.Async):
         self.threads = []
         self.lock
 
-    def reset(self):
-        pass
-
     def get_free_capacity(self):
         pass
 

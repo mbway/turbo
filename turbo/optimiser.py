@@ -102,16 +102,6 @@ class Optimiser:
         self._listeners = [l for l in self._listeners if l != listener]
         listener.unregistered()
 
-    def reset(self):
-        ''' clear the runtime data and remove listeners, but keep the optimiser configuration the same '''
-        self.rt = Optimiser.Runtime()
-        self._listeners = []
-        for m in (self.latent_space, self.pre_phase_select, self.fallback,
-                  self.maximise_acq, self.async_eval, self.parallel_strategy,
-                  self.surrogate_factory, self.acq_func_factory):
-            if m is not None:
-                m.reset()
-
     def get_incumbent(self):
         '''get the current best trial
 
@@ -243,10 +233,12 @@ class Optimiser:
             self._notify('surrogate_fitted', trial_num)
 
             acq_fun = self._get_acquisition_function(trial_num, model)
-            x, acq_x = self.maximise_acq(lb, acq_fun)
+            x, acq_x, maximisation_info = self.maximise_acq(lb, acq_fun)
             self._notify('acquisition_maximised', trial_num)
 
-            selection_info.update({'acq_x': acq_x, 'model': model, 'fitting_info': fitting_info})
+            selection_info.update({'acq_x': acq_x, 'model': model,
+                                   'fitting_info': fitting_info,
+                                   'maximisation_info': maximisation_info})
 
             if self.fallback.point_too_close(x, X):
                 # keep the selection info from the Bayes selection

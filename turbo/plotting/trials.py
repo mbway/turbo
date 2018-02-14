@@ -198,10 +198,13 @@ class DecodedTrial:
         # used for the plot title
         if self.is_bayes:
             self.extra_text = ''
+            self.title_color = 'black'
         elif self.is_pre_phase:
             self.extra_text = ' (pre_phase)'
+            self.title_color = 'violet'
         elif self.is_fallback:
             self.extra_text = ' (fallback, reason: {})'.format(self.fallback_reason)
+            self.title_color = 'red'
 
 class DecodedParam:
     '''A utility for collecting data regarding a single parameter for use with plotting
@@ -281,7 +284,7 @@ class DecodedParam:
 
 def plot_trial_1D(rec, param, trial_num, true_objective=None,
                   plot_in_latent_space=True, divisions=200, n_sigma=2,
-                  predict_through_all=True, log_scale=False, fig=None):
+                  predict_through_all=True, fig=None):
     r'''Plot the state of Bayesian optimisation (perturbed along a single
     parameter) at the time that the given trial was starting its evaluation.
 
@@ -314,8 +317,6 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
         predict_through_all: whether to plot a surrogate prediction through
             every sample or just through the location of the point chosen this
             iteration.
-        log_scale: whether to use a log scale for the `x` axis (regardless of
-            whether the input or latent space is being plotted)
         fig: the matplotlib figure to plot onto
     '''
     # to catch errors where the user mistakes this for the interactive version
@@ -360,12 +361,13 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
     grid = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=[2, 1])
     ax1, ax2 = fig.add_subplot(grid[0]), fig.add_subplot(grid[1])
 
-    fig.suptitle('Bayesian Optimisation Trial {}{}'.format(trial_num, t.extra_text), fontsize=14)
+    fig.suptitle('Bayesian Optimisation Trial {}{}'.format(trial_num, t.extra_text), fontsize=14, color=t.title_color)
     for ax in (ax1, ax2):
-        ax.set_xlim(param.plot_bounds)
-        ax.margins(0.005, 0.05)
-        if log_scale:
-            ax.set_xscale('log')
+        # lim and margins are mutually exclusive, so have to calculate margins manually...
+        xmin, xmax = param.plot_bounds
+        margin = (xmax-xmin)*0.005
+        ax.set_xlim((xmin-margin, xmax+margin))
+        ax.margins(y=0.05)
     fig.subplots_adjust(hspace=0.3)
 
     ax1.set_ylabel('objective')
@@ -376,7 +378,7 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
         ax2.set_ylabel('{}({})'.format(t.acq_fun.get_name(), param.name))
         ax2.set_title('Acquisition Function ({})'.format(t.acq_fun.get_name()))
 
-    bar_width, bar_color = 1, '#3590ce'
+    bar_width, bar_color = 1.5, '#3590ce'
 
     ##########
     # Top Axes
@@ -396,7 +398,7 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
 
     ax1.axvline(x=param.trial_val, linewidth=bar_width, color=bar_color)
     if t.is_fallback and t.fallback_reason == 'too_close':
-        ax1.axvline(x=bayes_val, linewidth=bar_width, color='grey')
+        ax1.axvline(x=bayes_val, linewidth=bar_width, color='orange')
     ax1.plot(param.trial_val, t.trial.y, 'bo', markersize=6, alpha=0.4, label='this trial')
 
     if not t.has_surrogate:
@@ -439,8 +441,8 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
 
     ax2.axvline(x=param.trial_val, linewidth=bar_width, color=bar_color)
     if t.is_fallback and t.fallback_reason == 'too_close':
-        ax2.axvline(x=bayes_val, linewidth=bar_width, color='grey')
-        ax2.plot(bayes_val, t.acq_x, '^', color='grey',
+        ax2.axvline(x=bayes_val, linewidth=bar_width, color='orange')
+        ax2.plot(bayes_val, t.acq_x, '^', color='orange',
                 markersize=7, zorder=10)
     elif t.is_bayes:
         ax2.plot(param.trial_val, t.acq_x, '^', color='black',
@@ -546,6 +548,12 @@ def plot_trial_2D(rec, x_param, y_param, trial_num, true_objective=None,
         acq_points = t.acq_fun(params.latent_plane_points)
         acq = params.points_to_grid(acq_points)
 
+    if t.is_fallback and t.fallback_reason == 'too_close':
+        # the value of the parameter for the point selected by Bayesian
+        # optimisation that was discarded
+        bayes_x_val = x_param.get_plot_val(t.bayes_x)
+        bayes_y_val = y_param.get_plot_val(t.bayes_x)
+
     if true_objective is not None:
         # true cost is either the cost function, or pre-computed costs as an array
         if callable(true_objective):
@@ -598,6 +606,12 @@ def plot_trial_2D(rec, x_param, y_param, trial_num, true_objective=None,
         ax.plot(x_param.trial_val, y_param.trial_val, marker='d', color='orangered',
                 markeredgecolor='black', markeredgewidth=1.0, markersize=10,
                 linestyle='None', label='this trial')
+
+        if t.is_fallback and t.fallback_reason == 'too_close':
+            ax.plot(bayes_x_val, bayes_y_val, marker='s', color='orange',
+                markeredgecolor='black', markeredgewidth=1.0, markersize=10,
+                linestyle='None', label='Bayes suggestion')
+
 
     def plot_heatmap(ax, data, colorbar, cmap, norm=None):
         # pcolormesh is better than imshow because: no need to fiddle around

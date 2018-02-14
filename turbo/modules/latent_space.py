@@ -28,9 +28,6 @@ class LatentSpace:
         input_bounds: the Bounds for the input space, provided by the optimiser
             at the start of a run
     '''
-    def reset(self):
-        ''' called when the optimiser is reset '''
-        raise NotImplementedError()
     def set_input_bounds(self, input_bounds):
         ''' called by the optimiser to initialise the latent space '''
         raise NotImplementedError()
@@ -111,8 +108,6 @@ class ConstantMap:
 
 class NoLatentSpace(LatentSpace):
     ''' perform no modification to the input space so that input space == latent space '''
-    def reset(self):
-        self.input_bounds = None
     def set_input_bounds(self, input_bounds):
         self.input_bounds = input_bounds
     def linear_latent_range(self, param, divisions):
@@ -196,10 +191,6 @@ class ConstantLatentSpace(LatentSpace):
             mappings (dict): a dictionary of param_name to ConstantMap for every parameter
         '''
         self.mappings = mappings
-        self.input_bounds = None
-        self.latent_bounds = None
-
-    def reset(self):
         self.input_bounds = None
         self.latent_bounds = None
 

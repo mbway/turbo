@@ -10,38 +10,36 @@ class Fallback:
     optimisation is too close to an existing sample.
 
     Attributes:
-        probability (float): the probability [0,1] that the trial
-            should use the fallback method instead of Bayesian optimisation.
-            (planned fallback) (0.0 to disable)
-        interval (int): the interval at which the fallback
-            method should be used instead of Bayesian optimisation (planned
-            fallback) (None to disable)
+        planned_fallback: a function which takes a trial number and the trial
+            number of the last planned fallback and returns whether the fallback
+            method should be used instead of Bayesian optimisation. (None to disable)
+
+            helper functions are provided: `Fallback.planned_with_probability()`
+            and `Fallback.planned_with_interval()` for easily constructing these
+            functions.
         close_tolerance: the maximum Euclidean distance considered 'too close',
             causing a Bayesian optimisation trial to be discarded and the
             fallback method used instead (not planned) (0.0 to disable)
     '''
-    def __init__(self, probability=0.0, interval=None, close_tolerance=1e-10):
-        self.probability = probability
-        self.interval = interval
+    def __init__(self, planned_fallback=None, close_tolerance=1e-10):
+        self.planned_fallback = planned_fallback
         self.close_tolerance = close_tolerance
-        self._last_planned_fallback = -1
-
-    def reset(self):
-        ''' called when the optimiser resets '''
         self._last_planned_fallback = -1
 
     def fallback_is_planned(self, trial_num):
         ''' whether a fallback is planned for this trial (queried before performing Bayesian optimisation) '''
-        if self._last_planned_fallback == -1:
-            self._last_planned_fallback = trial_num - 1
-
-        if (self.interval is not None and trial_num - self._last_planned_fallback - 1 >= self.interval) or \
-           (self.probability != 0.0 and np.random.uniform() < self.probability):
-
-            self._last_planned_fallback = trial_num
-            return True
-        else:
+        if self.planned_fallback is None:
             return False
+        else:
+            if self._last_planned_fallback == -1:
+                # on the first Bayesian optimisation trial, behave like a fallback
+                # had just happened so we start counting from now.
+                self._last_planned_fallback = trial_num - 1
+
+            planned = self.planned_fallback(trial_num, self._last_planned_fallback)
+            if planned:
+                self._last_planned_fallback = trial_num
+            return planned
 
     def point_too_close(self, x, X):
         ''' whether the trial point x is too close to any of the points in X '''
@@ -54,4 +52,20 @@ class Fallback:
         ''' select a trial using the fallback method '''
         lb = optimiser.latent_space.get_latent_bounds()
         return optimiser.pre_phase_select(num_points=1, latent_bounds=lb)
+
+
+    @staticmethod
+    def planned_with_probability(p):
+        ''' pass to Fallback constructor to use fallback with the given probability
+
+        Args:
+            p (float): the probability [0,1] that the trial should use the
+                fallback method instead of Bayesian optimisation.
+        '''
+        return lambda trial_num, last_planned_fallback: np.random.uniform(0, 1) < p
+
+    @staticmethod
+    def planned_with_interval(interval):
+        ''' pass to Fallback constructor to use fallback once every `interval` iterations '''
+        return lambda trial_num, last_planned_fallback: trial_num - last_planned_fallback >= interval
 
