@@ -33,7 +33,8 @@ class Optimiser:
         assert desired_extremum in ('min', 'max'), 'desired_extremum must be either "min" or "max"'
         self.desired_extremum = desired_extremum
         self.bounds = Bounds(bounds)
-        self.plan = Optimiser.Plan(pre_phase_trials)
+        assert pre_phase_trials > 0, 'a pre-phase is required'
+        self.pre_phase_trials = pre_phase_trials
 
         # modules
         self.latent_space = None
@@ -54,28 +55,6 @@ class Optimiser:
         if settings_preset is not None:
             load_optimiser_preset(self, settings_preset)
 
-    class Plan:
-        '''Guides the optimiser's high level decisions such as what technique to use to select the next trial
-
-        Attributes:
-            pre_phase_trials: the number of trials to use for the pre-phase
-                (before the Bayesian optimisation starts)
-            surrogate_train_interval: how often to optimise the hyperparameters
-                of the surrogate model. 0 => every iteration. When not training,
-                the hyperparameters are reused from the last time they were
-                trained.
-            hint_with_last_hyper_params: whether to use the last trained
-                surrogate hyperparameters as a starting point when optimising
-                them the next time.
-        '''
-        def __init__(self, pre_phase_trials, surrogate_train_interval=0,
-                     hint_with_last_hyper_params=True):
-            assert pre_phase_trials > 0, 'a pre-phase is required'
-            self.pre_phase_trials = pre_phase_trials
-            # TODO: maybe the surrogate stuff should be pulled out into a module or put into the surrogate factory?
-            self.surrogate_train_interval = surrogate_train_interval
-            self.hint_with_last_hyper_params = hint_with_last_hyper_params
-
     class Runtime:
         ''' holds the data for an optimisation run
 
@@ -84,8 +63,6 @@ class Optimiser:
                 run) before stopping
             trial_xs: input points (in latent space) for the finished trials
             trial_ys: cost values for the finished trials
-            last_trained: the trial_num of the last trial where the surrogate
-                model was trained, corresponds to `last_model_params`
         '''
         def __init__(self):
             self.running = False
@@ -95,8 +72,6 @@ class Optimiser:
             #TODO (naming): these should be finished_xs and finished_ys
             self.trial_xs = [] # list of row vectors
             self.trial_ys = [] # list of scalars
-            self.last_trained = -1 # trial_num corresponding to last_model_params
-            self.last_model_params = None
 
         def check_consistency(self):
             '''check that the optimiser runtime data makes sense
@@ -238,34 +213,13 @@ class Optimiser:
         return self.acq_func_factory(*acq_args)
 
     def _get_trial_type(self, trial_num):
-        if trial_num < self.plan.pre_phase_trials:
+        if trial_num < self.pre_phase_trials:
             return 'pre_phase'
         else:
             if self.fallback.fallback_is_planned(trial_num):
                 return 'fallback'
             else:
                 return 'bayes'
-
-    def _should_train_model(self, trial_num):
-        trials_since = trial_num - self.rt.last_trained - 1
-        return self.rt.last_trained == -1 or trials_since >= self.plan.surrogate_train_interval
-
-    def _get_hyper_params_hints(self):
-        if self.plan.hint_with_last_hyper_params:
-            last = self.rt.last_model_params
-            return None if last is None else [last]
-        else:
-            return None
-
-    def _fit_surrogate(self, X, y, trial_num, train):
-        model = self.surrogate_factory()
-        if train:
-            model.fit(X, y, hyper_params_hints=self._get_hyper_params_hints())
-            self.rt.last_model_params = model.get_hyper_params()
-            self.rt.last_trained = trial_num
-        else:
-            model.fit(X, y, fixed_hyper_params=self.rt.last_model_params)
-        return model
 
     def _select_trial(self, trial_num):
         ''' Get the next input to evaluate '''
@@ -285,13 +239,14 @@ class Optimiser:
 
         elif trial_type == 'bayes':
             X, y = np.vstack(rt.trial_xs), np.array(rt.trial_ys)
-            self._notify('fitting_surrogate', trial_num, X, y)
-            train = self._should_train_model(trial_num)
-            model = self._fit_surrogate(X, y, trial_num, train)
-            acq = self._get_acquisition_function(trial_num, model)
-            self._notify('maximising_acq', trial_num, acq)
-            x, ac_x = self.maximise_acq(lb, acq)
-            selection_info.update({'ac_x': ac_x, 'model': model, 'trained': train})
+            model, fitting_info = self.surrogate_factory(trial_num, X, y)
+            self._notify('surrogate_fitted', trial_num)
+
+            acq_fun = self._get_acquisition_function(trial_num, model)
+            x, acq_x = self.maximise_acq(lb, acq_fun)
+            self._notify('acquisition_maximised', trial_num)
+
+            selection_info.update({'acq_x': acq_x, 'model': model, 'fitting_info': fitting_info})
 
             if self.fallback.point_too_close(x, X):
                 # keep the selection info from the Bayes selection

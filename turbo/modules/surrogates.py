@@ -90,8 +90,11 @@ class Surrogate(object):
         def reset(self):
             ''' called when the optimiser is reset '''
             raise NotImplementedError()
-        def __call__(self):
-            ''' instantiate a new untrained surrogate model '''
+        def __call__(self, trial_num, X, y):
+            ''' instantiate a new surrogate model
+
+            Returns: (model, fitting_info)
+            '''
             raise NotImplementedError()
 
 
@@ -158,19 +161,53 @@ class SciKitGPSurrogate(Surrogate):
             'copy_X_train' : True
         }
 
-        def __init__(self, gp_params=None):
+        def __init__(self, gp_params=None, train_interval=0, hint_with_last_hyper_params=True):
             '''
             Args:
                 gp_params (dict): parameters to pass to scikit
                     see: http://scikit-learn.org/stable/modules/generated/sklearn.gaussian_process.GaussianProcessRegressor.html
+                surrogate_train_interval: how often to optimise the hyperparameters
+                    of the surrogate model. 0 => every iteration. When not training,
+                    the hyperparameters are reused from the last time they were
+                    trained.
+                hint_with_last_hyper_params: whether to use the last trained
+                    surrogate hyperparameters as a starting point when optimising
+                    them the next time.
             '''
             assert sk_gp is not None, 'failed to import sklearn.'
             self.gp_params = self.default_params if gp_params is None else gp_params
+            self.train_interval = train_interval
+            self.hint_with_last_hyper_params = hint_with_last_hyper_params
+            self._last_trained = -1
+            self._last_model_params = None
 
         def reset(self):
-            pass # nothing to do
+            self._last_trained = -1
+            self._last_model_params = None
 
-        def __call__(self):
-            return SciKitGPSurrogate(self.gp_params)
+        def _should_train_model(self, trial_num):
+            trials_since = trial_num - self._last_trained - 1
+            return self._last_trained == -1 or trials_since >= self.train_interval
+
+        def _get_hyper_params_hints(self):
+            if self.hint_with_last_hyper_params:
+                return None if self._last_model_params is None else [self._last_model_params]
+            else:
+                return None
+
+        def __call__(self, trial_num, X, y):
+            model = SciKitGPSurrogate(self.gp_params)
+            train = self._should_train_model(trial_num)
+            fitting_info = {'trained': train}
+            if train:
+                hints = self._get_hyper_params_hints()
+                model.fit(X, y, hyper_params_hints=hints)
+                self._last_trained = trial_num
+                self._last_model_params = model.get_hyper_params()
+                fitting_info.update({'hints': hints})
+            else:
+                model.fit(X, y, fixed_hyper_params=self._last_model_params)
+                fitting_info.update({'re_used': (self._last_trained, self._last_model_params)})
+            return model, fitting_info
 
 

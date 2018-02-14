@@ -184,8 +184,7 @@ class DecodedTrial:
         if self.has_surrogate:
             self.model = info['model']
             self.acq_fun = rec.get_acquisition_function(trial_num)
-            self.ac_x = info['ac_x']
-            self.trained = info['trained']
+            self.acq_x = info['acq_x']
 
         self.finished_xs = [f.x.flatten() for f in self.finished_trials] # in latent space
         self.finished_costs = [f.y for f in self.finished_trials]
@@ -441,10 +440,10 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
     ax2.axvline(x=param.trial_val, linewidth=bar_width, color=bar_color)
     if t.is_fallback and t.fallback_reason == 'too_close':
         ax2.axvline(x=bayes_val, linewidth=bar_width, color='grey')
-        ax2.plot(bayes_val, t.ac_x, '^', color='grey',
+        ax2.plot(bayes_val, t.acq_x, '^', color='grey',
                 markersize=7, zorder=10)
     elif t.is_bayes:
-        ax2.plot(param.trial_val, t.ac_x, '^', color='black',
+        ax2.plot(param.trial_val, t.acq_x, '^', color='black',
                 markersize=7, zorder=10, label='this trial')
 
 

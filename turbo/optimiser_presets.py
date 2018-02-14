@@ -26,7 +26,7 @@ def load_optimiser_preset(optimiser, name):
     elif name == 'random_search':
         # a degenerate optimiser which never leaves the pre-phase and so
         # performs random search rather than Bayesian optimisation.
-        optimiser.plan.pre_phase_trials = float('inf')
+        optimiser.pre_phase_trials = float('inf')
         optimiser.latent_space = tm.NoLatentSpace()
         optimiser.pre_phase_select = tm.random_selector()
         optimiser.fallback = None

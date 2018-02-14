@@ -31,14 +31,14 @@ class Listener:
         '''Called once the optimiser is looking to select a trial point
         '''
         pass
-    def fitting_surrogate(self, trial_num, X, y):
+    def surrogate_fitted(self, trial_num):
         '''Called when the fitting of the surrogate model for the given trial begins
 
         Note:
             once `maximising_acq()` is called, the surrogate fitting has finished
         '''
         pass
-    def maximising_acq(self, trial_num, acq):
+    def acquisition_maximised(self, trial_num):
         '''Called when the acquisition function begins maximisation for the given trial
 
         Note:
