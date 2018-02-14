@@ -22,12 +22,20 @@ class Surrogate(object):
     surrogate model for Bayesian optimisation.
     '''
 
-    def fit(self, X, y, hyper_params=None):
+    def fit(self, X, y, hyper_params_hints=None, fixed_hyper_params=None):
         '''fit the model to the given data set
 
-        If hyperparameters are not provided then they are estimated
+        If fixed hyperparameters are not provided then they are estimated
         algorithmically (e.g. through optimisation of data likelihood or
         marginalisation etc.)
+
+        Args:
+            hyper_params_hints (list): an optional list of hyperparameters to use
+                as starting points during the model training process
+            fixed_hyper_params: a set of hyperparameters to use instead of training
+
+        Note:
+            only one of `hyper_params_hints` and `fixed_hyper_params` should be provided at once
         '''
         raise NotImplementedError()
 
@@ -79,18 +87,11 @@ class Surrogate(object):
         be configured. The optimiser then uses the factory to generate and train
         a new model each iteration.
         '''
-        def __call__(self, X=None, y=None, hyper_params_hint=None):
-            ''' generate a surrogate model trained on the given data
-
-            Args:
-                hyper_params_hint: when provided, use the given hyper parameters
-                    as a starting point during the optimisation process.
-                    Obtained using `get_hyper_params()` on a trained model.
-
-            Note:
-                can either omit `X, y` in which case the surrogate will not be
-                fitted to anything, or provide both.
-            '''
+        def reset(self):
+            ''' called when the optimiser is reset '''
+            raise NotImplementedError()
+        def __call__(self):
+            ''' instantiate a new untrained surrogate model '''
             raise NotImplementedError()
 
 
@@ -100,8 +101,15 @@ class SciKitGPSurrogate(Surrogate):
         self.gp_params = gp_params
         self.model = sk_gp.GaussianProcessRegressor(**self.gp_params)
 
-    def fit(self, X, y, hyper_params=None):
-        if hyper_params is None:
+    def fit(self, X, y, hyper_params_hints=None, fixed_hyper_params=None):
+        assert fixed_hyper_params is None or hyper_params_hints is None, \
+            'cannot provided fixed hyperparameters and training hints at the same time'
+        if fixed_hyper_params is None:
+            if hyper_params_hints is not None:
+                assert len(hyper_params_hints) == 1, 'multiple hints not implemented' #TODO
+                # the hyperparameter values provided here are used as a starting
+                # point during restart 0 of the optimiser.
+                self.model.kernel = self.model.kernel.clone_with_theta(hyper_params_hints[0])
             self.model.fit(X, y)
         else:
             # gp_params may not have kernel or optimizer defined
@@ -109,7 +117,7 @@ class SciKitGPSurrogate(Surrogate):
             kernel = p['kernel']
             opt = p['optimizer']
             # hyper_params are the parameters for the _kernel_ only.
-            trained_kernel = kernel.clone_with_theta(np.array(hyper_params))
+            trained_kernel = kernel.clone_with_theta(fixed_hyper_params)
             # don't want to modify the kernel which is part of gp_params, so modify a clone
             self.model.set_params(kernel=trained_kernel)
             self.model.set_params(optimizer=None)
@@ -137,6 +145,7 @@ class SciKitGPSurrogate(Surrogate):
         return np.copy(self.model.kernel_.theta)
 
 
+
     class Factory(Surrogate.Factory):
         default_params = {
             # the multiplier allows the kernel to have a peak value different from
@@ -149,32 +158,19 @@ class SciKitGPSurrogate(Surrogate):
             'copy_X_train' : True
         }
 
-        def __init__(self, gp_params=None, use_hint=True):
+        def __init__(self, gp_params=None):
             '''
             Args:
                 gp_params (dict): parameters to pass to scikit
                     see: http://scikit-learn.org/stable/modules/generated/sklearn.gaussian_process.GaussianProcessRegressor.html
-                use_hint: whether to use the hyper parameters hint (usually the
-                    hyperparameters of the previous model) as a starting point
-                    for the hyper parameter optimisation.
             '''
             assert sk_gp is not None, 'failed to import sklearn.'
             self.gp_params = self.default_params if gp_params is None else gp_params
-            self.use_hint = use_hint
 
-        def __call__(self, X=None, y=None, hyper_params_hint=None):
-            '''
-            Note:
-                can either omit `X, y` in which case the surrogate will not be
-                fitted to anything, or provide both.
-            '''
-            sur = SciKitGPSurrogate(self.gp_params)
-            if X is not None and y is not None:
-                if self.use_hint and hyper_params_hint is not None:
-                    # the hyperparameter values provided here are used as a
-                    # starting point during restart 0 of the optimiser.
-                    sur.model.kernel = sur.model.kernel.clone_with_theta(hyper_params_hint)
-                sur.fit(X, y)
-            return sur
+        def reset(self):
+            pass # nothing to do
+
+        def __call__(self):
+            return SciKitGPSurrogate(self.gp_params)
 
 

@@ -10,9 +10,10 @@ from . import modules as tm
 def load_optimiser_preset(optimiser, name):
     if name == 'default':
         # this default should hopefully provide reasonable results in most situations
+        # the Optimiser.Plan defaults are left alone
         optimiser.latent_space = tm.NoLatentSpace()
-        optimiser.plan = tm.Plan(pre_phase_trials=10)
         optimiser.pre_phase_select = tm.random_selector()
+        optimiser.fallback = tm.Fallback()
         optimiser.maximise_acq = tm.random_quasi_newton()
         optimiser.async_eval = None
         optimiser.surrogate_factory = tm.SciKitGPSurrogate.Factory(gp_params=dict(
@@ -21,6 +22,19 @@ def load_optimiser_preset(optimiser, name):
             n_restarts_optimizer = 10,
         ))
         optimiser.acq_func_factory = tm.EI.Factory(xi=0.01)
+
+    elif name == 'random_search':
+        # a degenerate optimiser which never leaves the pre-phase and so
+        # performs random search rather than Bayesian optimisation.
+        optimiser.plan.pre_phase_trials = float('inf')
+        optimiser.latent_space = tm.NoLatentSpace()
+        optimiser.pre_phase_select = tm.random_selector()
+        optimiser.fallback = None
+        optimiser.maximise_acq = None
+        optimiser.async_eval = None
+        optimiser.surrogate_factory = None
+        optimiser.acq_func_factory = None
+
     else:
         raise ValueError('unknown preset name: {}'.format(name))
 

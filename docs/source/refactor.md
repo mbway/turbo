@@ -51,7 +51,7 @@ A 'Plan' module can be created which guides the overall behaviour of the search,
     - can either pass these values, or overload the methods yourself, eg to terminate the search when a number of configurations are chosen to within some tolerance rather than falling back to random etc.
     - `re_train_interval` to decide how often to train new model hyperparameters. The surrogate may implement a method for adding data cheaply without recomputing hyperparameters
 
-An 'Surrogate' module can be created which can construct new models or restore saved models. The models can be updated with new data, saved and queried
+A 'Surrogate' module can be created which can construct new models or restore saved models. The models can be updated with new data, saved and queried
 - input warping dealt with transparently from within this module
 - MCMC hyperparameter treatment dealt with transparently from within this module
 - @TODO: may have to be careful which side of the boundary to put the averaging over fantasies (because MCMC can re-use the current state of the parameters as a starting point). I.e. might want to give a data set and a list of fantasies and it returns

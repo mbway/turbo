@@ -2,6 +2,7 @@
 ''' GUI utilities for use with Jupyter/IPython '''
 
 try:
+    from IPython import get_ipython
     from IPython.core.debugger import set_trace
     from IPython.display import clear_output, display, Image, HTML
     import ipywidgets as widgets
@@ -42,6 +43,22 @@ def jupyter_set_trace():
         system code which you don't care about.
     '''
     set_trace()
+
+def using_svg_backend():
+    '''
+    using the following magic, Jupyter can be instructed to render matplotlib to
+    svg for displaying. This has the advantage of more crisp images, however
+    when rendering complex plots (such as a 2D heatmap) the resulting plot can
+    be fatally large (eg >20MB) so make sure the svg backend isn't used with
+    complex plots.
+
+    `%config InlineBackend.figure_format = 'svg'`
+
+    Note:
+        this detection method may not detect a global setting of this
+        configuration option instead of through a magic. I haven't tested it.
+    '''
+    return get_ipython().config['InlineBackend']['figure_format'] == 'svg'
 
 class LabelledProgressBar(widgets.IntProgress):
     def __init__(self, min, max, initial_value, label_prefix):
@@ -88,7 +105,7 @@ class OptimiserProgressBar(tm.Listener):
         this_run = max_trials - finished_trials
         self.bar = LabelledProgressBar(0, this_run, initial_value=0,
                                        label_prefix='Finished Trials: ')
-    def eval_finished(self, trial_num, y):
+    def eval_finished(self, trial_num, y, eval_info):
         self.bar.increment()
     def run_finished(self):
         if self.close_when_complete:

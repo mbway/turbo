@@ -27,19 +27,36 @@ class LatentSpace:
     Attributes:
         input_bounds: the Bounds for the input space, provided by the optimiser
             at the start of a run
-
-    Note:
-        there is not a guaranteed 1:1 relationship between parameters in the
-        input and latent spaces, and so the latent space uses different
-        parameter names, all with the prefix: 'latent_'. When passing parameter
-        names to any methods of latent space, never use the prefixed versions.
-
     '''
+    def reset(self):
+        ''' called when the optimiser is reset '''
+        raise NotImplementedError()
     def set_input_bounds(self, input_bounds):
         ''' called by the optimiser to initialise the latent space '''
         raise NotImplementedError()
     def get_latent_bounds(self):
-        ''' get a `Bounds` instance for the latent space '''
+        ''' get a `Bounds` instance for the latent space
+
+        Warning:
+            the entries in the latent space bounds may not correspond exactly
+            with the input space bounds because a single input space parameter
+            could map to 0, 1 or several latent space parameters and the
+            ordering could be different.
+            Use `get_latent_param_names()` to determine which entries in the latent
+            space bounds correspond to an input space parameter.
+        '''
+        raise NotImplementedError()
+    def get_latent_param_names(self, param_name):
+        '''get the corresponding latent space parameter names for the given input space parameter name
+
+        see the `get_latent_bounds()` documentation for explanation of why this is required.
+
+        Args:
+            param_name (str): an input space parameter name to be queried
+
+        Returns:
+            a list of names relating to `get_latent_bounds()`
+        '''
         raise NotImplementedError()
     def param_to_latent(self, param_name, param_val):
         ''' convert a value for the given parameter from input space to latent space '''
@@ -83,9 +100,19 @@ class LatentSpace:
         pmin, pmax = self.param_to_latent(param, pmin), self.param_to_latent(param, pmax)
         return np.linspace(pmin, pmax, num=divisions)
 
+class ConstantMap:
+    '''A mapping for a single parameter between the latent and input spaces
+    which does not change throughout the optimisation.
+    '''
+    def input_to_latent(self, param): raise NotImplementedError()
+    def latent_to_input(self, param): raise NotImplementedError()
+
+
 
 class NoLatentSpace(LatentSpace):
     ''' perform no modification to the input space so that input space == latent space '''
+    def reset(self):
+        self.input_bounds = None
     def set_input_bounds(self, input_bounds):
         self.input_bounds = input_bounds
     def linear_latent_range(self, param, divisions):
@@ -93,6 +120,10 @@ class NoLatentSpace(LatentSpace):
         return np.linspace(pmin, pmax, num=divisions)
     def get_latent_bounds(self):
         return self.input_bounds
+    def get_latent_param_names(self, param_name):
+        return [param_name]
+    def get_param_bounds(self, param_name):
+        return self.input_bounds.get(param_name)
     def param_to_latent(self, param_name, param_val):
         return param_val
     def param_from_latent(self, param_name, param_val):
@@ -105,23 +136,28 @@ class NoLatentSpace(LatentSpace):
 
 
 
-class ConstantMap:
-    '''A mapping for a single parameter between the latent and input spaces
-    which does not change throughout the optimisation.
-    '''
-    def input_to_latent(self, param): raise NotImplementedError()
-    def latent_to_input(self, param): raise NotImplementedError()
-
 class IdentityMap(ConstantMap):
     '''perform no modification so that latent space = input space for this parameter'''
     def input_to_latent(self, param): return param
     def latent_to_input(self, param): return param
 
-#TODO: might want to have a version where the minimum value is 0? log(param-min) and exp(param)+min
 class LogMap(ConstantMap):
-    '''perform a mapping such that latent space =ln(input space)'''
-    def input_to_latent(self, param): return math.log(param)
-    def latent_to_input(self, param): return math.exp(param)
+    r'''perform a mapping such that latent space is logarithmic
+
+    Note:
+        this map is only defined for input space values of :math:`]zero_point, +\infty]`
+
+    '''
+    def __init__(self, zero_point=0):
+        '''
+        Args:
+            zero_point: move the point at which the parameter value maps to
+                infinity. This parameter is useful for moving the asymptote
+                outside of the input space range to avoid crashing.
+        '''
+        self.zero_point = zero_point
+    def input_to_latent(self, param): return math.log(param-self.zero_point)
+    def latent_to_input(self, param): return math.exp(param)+self.zero_point
 
 class LinearMap(ConstantMap):
     '''linearly remap the input space boundaries to the given boundaries
@@ -163,9 +199,15 @@ class ConstantLatentSpace(LatentSpace):
         self.input_bounds = None
         self.latent_bounds = None
 
+    def reset(self):
+        self.input_bounds = None
+        self.latent_bounds = None
+
     def set_input_bounds(self, input_bounds):
         assert set(self.mappings.keys()) == set(input_bounds.params), \
             'parameters with mappings differs from those of the bounds'
+        assert all(isinstance(m, ConstantMap) for m in self.mappings.values()), \
+            'mappings must be constant'
         self.input_bounds = input_bounds
 
         latent_bounds = []
@@ -179,8 +221,10 @@ class ConstantLatentSpace(LatentSpace):
     def get_latent_bounds(self):
         # for this latent space, the bounds can be precomputed
         return self.latent_bounds
+    def get_latent_param_names(self, param_name):
+        return ['latent_' + param_name]
 
-    def _convert_point(self, point, to_latent):
+    def _transform_point(self, point, to_latent):
         '''Convert a point to or from the latent space
 
         Args:
@@ -203,9 +247,9 @@ class ConstantLatentSpace(LatentSpace):
 
     def to_latent(self, point):
         ''' transform the point from the input space to the latent space '''
-        return self._convert_point(point, to_latent=True)
+        return self._transform_point(point, to_latent=True)
     def from_latent(self, point):
         ''' transform the point from the latent space to the input space '''
-        return self._convert_point(point, to_latent=False)
+        return self._transform_point(point, to_latent=False)
 
 

@@ -20,7 +20,7 @@ class random_quasi_newton:
             start_from_best: number of points from the random phase to use
                 as starting points in the gradient-based stage. Included in the
                 grad_restarts total, the remaining points will be chosen at
-                random.  should be <= num_random and <= grad_restarts
+                random. should be <= num_random and <= grad_restarts
         '''
         self.num_random = num_random
         self.grad_restarts = grad_restarts
@@ -28,6 +28,9 @@ class random_quasi_newton:
         self.gen_random = random_selector()
         assert start_from_best <= num_random
         assert start_from_best <= grad_restarts
+
+    def reset(self):
+        pass # nothing to do
 
     def on_warning(self, warning):
         '''Called when the BFGS optimiser raises a warning.

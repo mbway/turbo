@@ -11,10 +11,10 @@ import numpy as np
 
 
 class random_selector:
-    ''' select points uniform-randomly in the latent space
-    '''
-    def __init__(self):
-        pass
+    ''' select points uniform-randomly in the latent space '''
+    def reset(self):
+        pass # nothing to do
+
     def __call__(self, num_points, latent_bounds):
         # generate values for each parameter
         cols = []
@@ -26,6 +26,8 @@ class random_selector_with_tolerance:
     def __init__(self, optimiser, close_tolerance=1e-8):
         self.optimiser = optimiser
         self.close_tolerance = close_tolerance
+    def reset(self):
+        pass # nothing to do
     def __call__(self, num_points, latent_bounds):
         pass
 

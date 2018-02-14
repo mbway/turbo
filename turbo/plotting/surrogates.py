@@ -10,8 +10,8 @@ def plot_surrogate_likelihood_over_time(rec, fig_ax=None):
     fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=(10, 4)) # inches
     trial_nums = [t[0] for t in sorted(rec.trials.items())]
     # only interested in the Bayesian optimisation steps
-    trial_nums = [t for t in trial_nums if rec.trials[t].extra_data['type'] == 'bayes']
-    models = [rec.trials[t].extra_data['model'] for t in trial_nums]
+    trial_nums = [t for t in trial_nums if 'model' in rec.trials[t].selection_info]
+    models = [rec.trials[t].selection_info['model'] for t in trial_nums]
     assert models, 'no Bayesian optimisation iterations recorded'
 
     # assume the surrogate models all have the same type
@@ -47,8 +47,8 @@ def plot_surrogate_hyper_params_1D(rec, param_index, trial_nums=None,
     fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=(8, 6)) # inches
     trial_nums = trial_nums or [t[0] for t in sorted(rec.trials.items())]
     # only interested in the Bayesian optimisation steps
-    trial_nums = [t for t in trial_nums if rec.trials[t].extra_data['type'] == 'bayes']
-    models = [rec.trials[t].extra_data['model'] for t in trial_nums]
+    trial_nums = [t for t in trial_nums if 'model' in rec.trials[t].selection_info]
+    models = [rec.trials[t].selection_info['model'] for t in trial_nums]
     assert models, 'no Bayesian optimisation iterations recorded'
 
     # assume the surrogate models all have the same type
@@ -102,8 +102,8 @@ def plot_surrogate_hyper_params_2D(rec, param_indices=(0, 1), trial_nums=None,
     x_param, y_param = param_indices
     trial_nums = trial_nums or [t[0] for t in sorted(rec.trials.items())]
     # only interested in the Bayesian optimisation steps
-    trial_nums = [t for t in trial_nums if rec.trials[t].extra_data['type'] == 'bayes']
-    models = [rec.trials[t].extra_data['model'] for t in trial_nums]
+    trial_nums = [t for t in trial_nums if 'model' in rec.trials[t].selection_info]
+    models = [rec.trials[t].selection_info['model'] for t in trial_nums]
     assert models, 'no Bayesian optimisation iterations recorded'
 
     # assume the surrogate models all have the same type

@@ -17,12 +17,20 @@ class PlottingRecorder(tm.Listener):
     '''
     class Trial:
         #TODO: re-enable slots (disabled so Jupyter doesn't forget the class between reloads)
-        #__slots__ = ('trial_num', 'x', 'y', 'extra_data')
+        #__slots__ = ('trial_num', 'x', 'y', 'selection_info')
         def __init__(self):
             self.trial_num = None
             self.x = None
             self.y = None
-            self.extra_data = None
+            self.selection_info = None
+            self.eval_info = None
+
+        def is_pre_phase(self):
+            return self.selection_info['type'] == 'pre_phase'
+        def is_bayes(self):
+            return self.selection_info['type'] == 'bayes'
+        def is_fallback(self):
+            return self.selection_info['type'] == 'fallback'
 
     def __init__(self, optimiser=None):
         '''
@@ -47,14 +55,15 @@ class PlottingRecorder(tm.Listener):
         t.trial_num = trial_num
         self.trials[trial_num] = t
 
-    def selection_finished(self, trial_num, x, selection_details):
+    def selection_finished(self, trial_num, x, selection_info):
         t = self.trials[trial_num]
         t.x = x
-        t.extra_data = selection_details
+        t.selection_info = selection_info
 
-    def eval_finished(self, trial_num, y):
+    def eval_finished(self, trial_num, y, eval_info):
         t = self.trials[trial_num]
         t.y = y
+        t.eval_info = eval_info
 
 
 
@@ -75,8 +84,8 @@ class PlottingRecorder(tm.Listener):
         opt = self.optimiser
         acq_type = opt.acq_func_factory.get_type()
         finished, t = self.get_data_for_trial(trial_num)
-        assert t.extra_data['type'] == 'bayes'
-        acq_args = [trial_num, t.extra_data['model'], opt.desired_extremum]
+        assert 'model' in t.selection_info, 'the trial doesn\'t have a model'
+        acq_args = [trial_num, t.selection_info['model'], opt.desired_extremum]
         if acq_type == 'optimism':
             pass # no extra arguments needed
         elif acq_type == 'improvement':

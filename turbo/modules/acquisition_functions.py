@@ -8,6 +8,8 @@ import sys
 # local modules
 from turbo.utils import *
 
+#TODO: look at gpyopt for guidance doing acquisition function gradients
+#TODO: by looking at gpyopt, it looks like acquisition functions have to change calculations when doing MCMC, I think this is best detected by whether surrogate.predict returns a single answer or several.
 
 class AcquisitionFunction:
     ''' A function which is used to determine the best place to sample next
@@ -46,6 +48,9 @@ class AcquisitionFunction:
         functions can be configured. The optimiser then uses the factory to
         generate acquisition functions specialised to the current iteration.
         '''
+        def reset(self):
+            pass # nothing to do
+
         def get_type(self):
             ''' get the type of acquisition function that this factory constructs
 
@@ -193,7 +198,7 @@ class PI(AcquisitionFunction):
             desired_extremum: `'max' =>` higher cost is better, `'min' =>` lower
                 cost is better.
             incumbent_cost: the current best cost/objective function value for a finished trial
-            xi: a parameter >0 for exploration/exploitation trade-off. Larger =>
+            xi: a parameter >0 (sometimes called 'jitter') for exploration/exploitation trade-off. Larger =>
                 more exploration.
         '''
         super().__init__(model, desired_extremum)
@@ -283,9 +288,9 @@ class EI(AcquisitionFunction):
     - :math:`\phi(\cdot)=` standard multivariate normal distribution PDF (ie :math:`\boldsymbol\mu=\mathbf 0,\;\Sigma=I`)
     - :math:`\Phi(\cdot)=` standard multivariate normal distribution CDF
 
-    a parameter :math:`\xi` can be introduced to control the
-    exploitation-exploration trade-off (:math:`\xi=0.01` works well in 'almost
-    all cases' (Lizotte, 2008))
+    a parameter :math:`\xi` (sometimes called 'jitter') can be introduced to
+    control the exploitation-exploration trade-off (:math:`\xi=0.01` works well
+    in 'almost all cases' (Lizotte, 2008))
 
     .. math::
         EI(\mathbf x)=\begin{cases}
@@ -304,7 +309,7 @@ class EI(AcquisitionFunction):
             desired_extremum: `'max' =>` higher cost is better, `'min' =>` lower
                 cost is better.
             incumbent_cost: the current best cost/objective function value for a finished trial
-            xi: a parameter >0 for exploration/exploitation trade-off. Larger =>
+            xi: a parameter >0 (sometimes called 'jitter') for exploration/exploitation trade-off. Larger =>
                 more exploration.
         '''
         super().__init__(model, desired_extremum)

@@ -15,7 +15,6 @@ class Listener:
         - run_finished
         - unregistered
 
-
     '''
     def registered(self, optimier):
         '''Called when the listener is registered with the given optimiser '''
@@ -46,20 +45,27 @@ class Listener:
             once `trial_started()` is called, the acquisition maximisation has finished
         '''
         pass
-    def selection_finished(self, trial_num, x, selection_details):
+    def selection_finished(self, trial_num, x, selection_info):
         '''Called when the trial point `x` has been chosen
 
         Args:
-            selection_details (dict): information about the selection process.
+            selection_info (dict): information about the selection process.
                 The specific contents depends on what type of selection
                 occurred, which can be determined by the value of
-                `selection_details['type']`
+                `selection_info['type']`
         '''
     def eval_started(self, trial_num):
         '''Called once the trial point `x` has been selected and evaluation will begin '''
         pass
-    def eval_finished(self, trial_num, y):
-        '''Called once the evaluation for the given trial has finished '''
+    def eval_finished(self, trial_num, y, eval_info):
+        '''Called once the evaluation for the given trial has finished
+
+        Args:
+            y (float): the cost value returned from the objective function
+            eval_info (?): information about the selection process (returned
+                from the objective function). None if the objective function
+                only returned a cost value.
+        '''
         pass
     def run_finished(self):
         '''Called when `Optimiser.run()` exits '''

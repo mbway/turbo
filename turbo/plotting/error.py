@@ -24,7 +24,12 @@ def plot_error_over_time(rec, true_best, log_scale=False, plot_best=True, fig_ax
     xs = [n for n, t in trials]
     errors = [(true_best - t.y if rec.optimiser.is_maximising() else t.y - true_best)
               for n, t in trials]
-    colors = ['#4c72b0' if t.extra_data['type'] == 'bayes' else 'violet' for n, t in trials]
+    color_dict = {
+        'pre_phase': 'violet',
+        'bayes': '#4c72b0',
+        'fallback': 'red'
+    }
+    colors = [color_dict[t.selection_info['type']] for n, t in trials]
 
     assert errors, 'no trials'
     if any(e < 0 for e in errors):
