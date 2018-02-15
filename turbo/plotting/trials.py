@@ -16,6 +16,7 @@ from turbo.utils import row2D, unique_rows_close
 
 
 #TODO: could use k-means to choose N locations to plot the surrogate through to get the best coverage of interesting regions while using as few plots as possible
+#TODO: plots could use PlottingRecorder.unfinished_trial_nums to ignore any unfinished trials. This would allow for running the optimiser in the background while plotting before the optimiser has finished.
 
 
 def _choose_predict_locations(trial_x, finished_xs, param_index):
@@ -41,6 +42,7 @@ def _choose_predict_locations(trial_x, finished_xs, param_index):
     param_zeroed = param_zeroed[1:, :] # exclude the trial point (first row)
     return param_zeroed
 
+#TODO: instead of providing/not providing parameters to add/remove widgets. Always display the widgets but change the default value based on what is passed in
 def interactive_plot_trial_1D(rec, param=None, trial_num=None, plot_in_latent_space=None, *args, **kwargs):
     '''choose the param and trial_num for the trial plot interactively
 
@@ -162,7 +164,7 @@ def interactive_plot_trial_2D(rec, x_param=None, y_param=None, trial_num=None, p
 
 class DecodedTrial:
     ''' A utility for collecting data regarding a trial for use with plotting '''
-    def __init__(self, trial_num, rec):
+    def __init__(self, trial_num, rec, plot_through):
         opt = rec.optimiser
         self.finished_trials, self.trial = rec.get_data_for_trial(trial_num)
 
@@ -194,6 +196,15 @@ class DecodedTrial:
             self.incumbent_index = np.argmax(costs) if opt.is_maximising() else np.argmin(costs)
             self.incumbent_mask = np.ones_like(costs, dtype=bool)
             self.incumbent_mask[self.incumbent_index] = False
+
+        if isinstance(plot_through, int):
+            self.plot_through = rec.trials[plot_through].x
+        elif plot_through == 'trial':
+            self.plot_through = self.trial.x
+        elif plot_through == 'incumbent':
+            self.plot_through = row2D(self.finished_xs[self.incumbent_index])
+        else:
+            raise ValueError(plot_through)
 
         # used for the plot title
         if self.is_bayes:
@@ -281,10 +292,9 @@ class DecodedParam:
         return points
 
 
-
 def plot_trial_1D(rec, param, trial_num, true_objective=None,
                   plot_in_latent_space=True, divisions=200, n_sigma=2,
-                  predict_through_all=True, fig=None):
+                  predict_through_all=True, plot_through='trial', ylim=None, fig=None):
     r'''Plot the state of Bayesian optimisation (perturbed along a single
     parameter) at the time that the given trial was starting its evaluation.
 
@@ -317,6 +327,14 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
         predict_through_all: whether to plot a surrogate prediction through
             every sample or just through the location of the point chosen this
             iteration.
+        plot_through: the point which the main (most significant) prediction
+            plot passes through. either 'trial' (current trial) or 'incumbent
+            (best trial so far) or a trial number (which can be after the trial
+            being plotted). The acquisition function always passes through the
+            current trial since there would not be much use in doing anything
+            else.
+        ylim: when specified, set the limits of the y/cost axis to
+            get a better detailed look at that range of values (optional)
         fig: the matplotlib figure to plot onto
     '''
     # to catch errors where the user mistakes this for the interactive version
@@ -332,7 +350,7 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
     ################
     # Extract Data
     ################
-    t = DecodedTrial(trial_num, rec)
+    t = DecodedTrial(trial_num, rec, plot_through)
     param = DecodedParam(param, rec, divisions, plot_in_latent_space, t.finished_xs, t.trial)
 
     if t.has_surrogate:
@@ -367,7 +385,9 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
         xmin, xmax = param.plot_bounds
         margin = (xmax-xmin)*0.005
         ax.set_xlim((xmin-margin, xmax+margin))
-        ax.margins(y=0.05)
+        ax.margins(y=0.04)
+    if ylim is not None:
+        ax1.set_ylim(ylim)
     fig.subplots_adjust(hspace=0.3)
 
     ax1.set_ylabel('objective')
@@ -418,7 +438,8 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
 
     #TODO: fit the view to the cost function, don't expand to fit in the uncertainty
 
-    plot_prediction_through(t.trial.x, label=True, mu_alpha=1, sigma_alpha=0.25)
+    # the most significant prediction plot
+    plot_prediction_through(t.plot_through, label=True, mu_alpha=1, sigma_alpha=0.25)
 
     # plot the predictions through each sample
     #TODO: change name since not predicting through all any more
@@ -526,20 +547,11 @@ def plot_trial_2D(rec, x_param, y_param, trial_num, true_objective=None,
     ################
     # Extract Data
     ################
-    t = DecodedTrial(trial_num, rec)
+    t = DecodedTrial(trial_num, rec, plot_through)
     x_param = DecodedParam(x_param, rec, divisions[0], plot_in_latent_space[0], t.finished_xs, t.trial)
     y_param = DecodedParam(y_param, rec, divisions[1], plot_in_latent_space[1], t.finished_xs, t.trial)
 
-    if isinstance(plot_through, int):
-        plot_through = rec.trials[plot_through].x
-    elif plot_through == 'trial':
-        plot_through = t.trial.x
-    elif plot_through == 'incumbent':
-        plot_through = row2D(t.finished_xs[t.incumbent_index])
-    else:
-        raise ValueError(plot_through)
-
-    params = Decoded2Params(x_param, y_param, plot_through, divisions)
+    params = Decoded2Params(x_param, y_param, t.plot_through, divisions)
 
     if t.has_surrogate:
         mus_points, sigmas_points = t.model.predict(params.latent_plane_points, return_std_dev=True)

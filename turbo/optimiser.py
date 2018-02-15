@@ -141,8 +141,8 @@ class Optimiser:
             rt.started_trials += 1
             res = self.objective(**params_dict)
             # the objective function may either return a float, or a tuple of (cost, eval_info)
-            y, eval_info = res if isinstance(res, tuple) else res, None
-            assert isinstance(y, float), 'objective function should return a float for the cost'
+            y, eval_info = res if isinstance(res, tuple) else (res, None)
+            assert isinstance(y, float), 'objective function should return a float for the cost, instead: {}'.format(type(y))
 
             #TODO: assert that y is the correct type and not None, NaN or infinity
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import matplotlib as mpl
+import numpy as np
 
 class MidpointNorm(mpl.colors.Normalize):
     '''Warp the colormap so that more of the available colors are used on the range of interesting data.

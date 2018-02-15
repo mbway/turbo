@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 
+import numpy as np
+
+import turbo as tb
 import turbo.modules as tm
 
+#TODO: probably should move out of plotting and have it at the root called something else. Recorder or TrialRecorder or something?
+#TODO: record timing information
 class PlottingRecorder(tm.Listener):
     ''' A listener which records data about the trials of an optimiser for plotting later
 
@@ -16,14 +21,16 @@ class PlottingRecorder(tm.Listener):
         trials: a list of Trial objects recorded from the optimiser
     '''
     class Trial:
-        #TODO: re-enable slots (disabled so Jupyter doesn't forget the class between reloads)
-        #__slots__ = ('trial_num', 'x', 'y', 'selection_info')
         def __init__(self):
             self.trial_num = None
             self.x = None
             self.y = None
             self.selection_info = None
             self.eval_info = None
+
+        def __repr__(self):
+            attrs = ('trial_num', 'x', 'y', 'selection_info', 'eval_info')
+            return 'Trial({})'.format(', '.join('{}={}'.format(k, getattr(self, k)) for k in attrs))
 
         def is_pre_phase(self):
             return self.selection_info['type'] == 'pre_phase'
@@ -40,9 +47,27 @@ class PlottingRecorder(tm.Listener):
                 object as an argument in order to receive messages.
         '''
         self.trials = {}
+        self.unfinished_trial_nums = set()
         self.optimiser = optimiser
         if optimiser is not None:
             optimiser.register_listener(self)
+
+    def save_compressed(self, filename, overwrite=False):
+        ''' save the recorder to a file
+
+        Note:
+            this method is necessary as `utils.save_compressed()` will crash
+            otherwise due to the circular reference between the recorder and the
+            optimiser
+        '''
+        assert self.optimiser is not None
+        assert not self.optimiser.rt.running
+        # since self is a listener of the optimiser, if the listeners are saved
+        # then there is a circular reference!
+        listeners = self.optimiser._listeners
+        self.optimiser._listeners = []
+        tb.utils.save_compressed(self, filename, overwrite)
+        self.optimiser._listeners = listeners
 
     def registered(self, optimiser):
         assert self.optimiser is None or self.optimiser == optimiser, \
@@ -54,6 +79,7 @@ class PlottingRecorder(tm.Listener):
         t = PlottingRecorder.Trial()
         t.trial_num = trial_num
         self.trials[trial_num] = t
+        self.unfinished_trial_nums.add(trial_num)
 
     def selection_finished(self, trial_num, x, selection_info):
         t = self.trials[trial_num]
@@ -64,6 +90,7 @@ class PlottingRecorder(tm.Listener):
         t = self.trials[trial_num]
         t.y = y
         t.eval_info = eval_info
+        self.unfinished_trial_nums.remove(trial_num)
 
 
 
@@ -72,6 +99,13 @@ class PlottingRecorder(tm.Listener):
     def get_sorted_trials(self):
         ''' return a list of (trial_num, Trial) sorted by trial_num (and so sorted by start time) '''
         return sorted(self.trials.items())
+
+    def get_incumbent(self):
+        trials = self.get_sorted_trials()
+        costs = [t.y for n, t in trials]
+        i = np.argmax(costs) if self.optimiser.is_maximising() else np.argmin(costs)
+        return trials[i][1]
+
 
     def get_data_for_trial(self, trial_num):
         #TODO: for async cannot assume that finished == all trials before trial_num
@@ -95,4 +129,10 @@ class PlottingRecorder(tm.Listener):
         else:
             raise NotImplementedError('unsupported acquisition function type: {}'.format(acq_type))
         return opt.acq_func_factory(*acq_args)
+
+    def remove_unfinished(self):
+        ''' remove any unfinished trials. This is useful for still being able to plot after interrupting an Optimiser before it finished '''
+        for trial_num in self.unfinished_trial_nums:
+            del self.trials[trial_num]
+        self.unfinished_trial_nums = set()
 

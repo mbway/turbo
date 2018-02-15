@@ -106,7 +106,7 @@ class random_quasi_newton:
                     best_y = res_y # shape=(1,1)
 
         if len(all_warnings) > 0:
-            maximisation_info.update({'warnings' : all_warnings})
+            maximisation_info.update({'warnings' : [w.message for w in all_warnings]})
 
         if best_x is None:
             best_y = -inf

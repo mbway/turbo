@@ -6,7 +6,7 @@ import matplotlib.ticker as ticker
 
 #TODO: plot objective function value over time. Should this file be named something different?
 
-def plot_error_over_time(rec, true_best, log_scale=False, plot_best=True, fig_ax=None):
+def plot_error_over_time(rec, true_best, log_scale=False, plot_best=True, ylim=None, fig_ax=None):
     '''
     plot a line graph showing the difference between the known optimal value
     and the optimiser's best guess at each step.
@@ -16,6 +16,8 @@ def plot_error_over_time(rec, true_best, log_scale=False, plot_best=True, fig_ax
         true_best (float): the globally optimal value to compare to
         log_scale: whether to plot on a logarithmic or a linear scale
         plot_best: whether to plot a marker showing the trial with the overall best cost
+        ylim: when specified, set the limits of the y/cost axis to
+            get a better detailed look at that range of values (optional)
         fig_ax: the figure and axes to plot to in a tuple (optional)
     '''
     fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=(10, 4)) # inches
@@ -59,11 +61,14 @@ def plot_error_over_time(rec, true_best, log_scale=False, plot_best=True, fig_ax
 
     if log_scale:
         ax.set_yscale('log')
+    if ylim is not None:
+        ax.set_ylim(ylim)
 
     if len(xs) < 50:
         ax.xaxis.set_major_locator(ticker.MultipleLocator(2.0))
     elif len(xs) < 100:
         ax.xaxis.set_major_locator(ticker.MultipleLocator(5.0))
     ax.legend()
+    return fig
 
 

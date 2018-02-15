@@ -3,6 +3,39 @@
 import sys
 import warnings
 import numpy as np
+import os
+import dill as pickle # regular pickle can't pickle lambdas (and has lots of other problems)
+import gzip
+
+def detect_pickle_problems(obj):
+    ''' use this to descend through a problematic object (manually, one level at
+    a time) to find the culprite of a failed pickle or copy
+    '''
+    for k in obj.__dict__.keys():
+        try:
+            dill.dumps(getattr(obj, k))
+        except Exception:
+            print('problematic attribute: {}'.format(k))
+
+def save_compressed(obj, filename, overwrite=False):
+    '''save the given object to a compressed file
+
+    the file extension should be '.pkl.gz'
+
+    Note:
+        if this fails, dill has some functions to detect problems: https://github.com/uqfoundation/dill/blob/master/dill/detect.py
+        such as `dill.detect.badobjects(..., depth=...)`
+    '''
+    if not overwrite and os.path.isfile(filename):
+        raise Exception('file already exists and instructed not to overwrite: {}'.format(filename))
+    with gzip.open(filename, 'wb') as f:
+        pickle.dump(obj, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+def load_compressed(filename):
+    ''' load an object from a compressed file created with `save_compressed()` '''
+    with gzip.open(filename, 'rb') as f:
+        return pickle.load(f)
+
 
 def print_err(*args, **kwargs):
     '''print to `stderr` '''
@@ -18,44 +51,6 @@ def col2D(arr):
     ''' convert a numpy array with shape `(l,)` into an array with shape `(l,1)`
     '''
     return arr.reshape(-1, 1)
-
-def print_warning(warning):
-    w = warnings.formatwarning(
-        warning.message, warning.category, warning.filename, warning.lineno, warning.line)
-    print_err(w)
-
-class IgnoreWarnings(warnings.catch_warnings):
-    '''Ignore any warnings that are raised within a block
-    '''
-    def __init__(self):
-        super().__init__(record=True)
-
-class WarningCatcher(warnings.catch_warnings):
-    '''
-    capture any warnings raised within the with statement and instead of
-    printing them, pass them to the given function. Example:
-    >>> with WarningCatcher(lambda warn: print(warn)):
-    ...     # stuff
-
-    Note: it is possible to nest WarningCatchers, in which case the inner most
-        catcher is the only one which receives the warning.
-
-    Note: because of the nature of warnings, `on_warning()` is only called when
-        the with statement ends rather than immediately when the warning is
-        raised (unlike exceptions).
-    '''
-    def __init__(self, on_warning):
-        '''
-        on_warning: a function which takes a warning and does something with it
-        '''
-        super().__init__(record=True)
-        self.on_warning = on_warning
-    def __enter__(self):
-        self.warning_list = super().__enter__()
-    def __exit__(self, *args):
-        for warn in self.warning_list:
-            self.on_warning(warn)
-        super().__exit__(*args)
 
 
 def close_to_any(x, xs, tol=1e-5):
