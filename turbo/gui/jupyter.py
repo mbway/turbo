@@ -3,8 +3,8 @@
 
 try:
     from IPython import get_ipython
-    from IPython.core.debugger import set_trace
-    from IPython.display import clear_output, display, Image, HTML
+    from IPython.core.debugger import Pdb
+    from IPython.display import clear_output, display, Image, HTML, Javascript
     import ipywidgets as widgets
 except ImportError:
     pass # Jupyter not installed
@@ -26,6 +26,14 @@ def in_jupyter():
         return False
     return True
 
+def jupyter_set_width(width):
+    '''set the width of the central element of the notebook
+
+    Args:
+        width (str): a css string to set the width to (eg "123px" or "90%" etc)
+    '''
+    display(Javascript('document.getElementById("notebook-container").style.width = "{}"'.format(width)))
+
 if in_jupyter():
     print('Setting up GUI for Jupyter')
     # hide scroll bars that sometimes appear (apparently by chance) because the
@@ -42,7 +50,7 @@ def jupyter_set_trace():
         continue to reach it, otherwise stepping with next leads deep into some
         system code which you don't care about.
     '''
-    set_trace()
+    Pdb.set_trace()
 
 def using_svg_backend():
     '''

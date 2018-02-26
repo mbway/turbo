@@ -60,14 +60,26 @@ class PlottingRecorder(tm.Listener):
             otherwise due to the circular reference between the recorder and the
             optimiser
         '''
-        assert self.optimiser is not None
-        assert not self.optimiser.rt.running
-        # since self is a listener of the optimiser, if the listeners are saved
-        # then there is a circular reference!
-        listeners = self.optimiser._listeners
-        self.optimiser._listeners = []
-        tb.utils.save_compressed(self, filename, overwrite)
-        self.optimiser._listeners = listeners
+        opt = self.optimiser
+        assert opt is not None
+        assert not opt.rt.running
+
+        listeners = opt._listeners
+        objective = opt.objective
+        try:
+            # since self is a listener of the optimiser, if the listeners are saved
+            # then there is a circular reference!
+            opt._listeners = []
+            # The objective function could be arbitrarily complex and so may not pickle
+            opt.objective = None
+
+            problems = tb.utils.detect_pickle_problems(self, quiet=True)
+            assert not problems, 'problems detected: {}'.format(problems)
+
+            tb.utils.save_compressed(self, filename, overwrite)
+        finally:
+            opt._listeners = listeners
+            opt.objective = objective
 
     def registered(self, optimiser):
         assert self.optimiser is None or self.optimiser == optimiser, \

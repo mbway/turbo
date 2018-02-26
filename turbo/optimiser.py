@@ -43,7 +43,7 @@ class Optimiser:
         self.maximise_acq = None
         self.async_eval = None#TODO
         self.parallel_strategy = None#TODO
-        self.surrogate_factory = None
+        self.surrogate = None
         self.acq_func_factory = None
 
         # runtime data kept separate from configuration data
@@ -51,6 +51,8 @@ class Optimiser:
         # shouldn't be accessed directly, but through the `register_listener()`
         # and `unregister_listener()` methods
         self._listeners = []
+
+        self.initialised = True # no more attributes can be set
 
         if settings_preset is not None:
             load_optimiser_preset(self, settings_preset)
@@ -87,6 +89,20 @@ class Optimiser:
             self.trial_xs.append(x)
             self.trial_ys.append(y)
             self.finished_trials += 1
+
+    def __setattr__(self, name, value):
+        '''limit the ability to set optimiser attributes. New attributes can
+        only be created from the constructor.
+
+        This can help prevent typos caused by getting the name of a module wrong
+        (or catching when a name changes due to an API update), which would
+        otherwise fail silently, especially if default settings are loaded.
+        '''
+        initialised = hasattr(self, 'initialised') and self.initialised
+        if hasattr(self, name) or not initialised:
+            object.__setattr__(self, name, value)
+        else:
+            raise AttributeError('Optimiser does not have an "{}" attribute!'.format(name))
 
     def is_maximising(self):
         return self.desired_extremum == 'max'
@@ -229,7 +245,7 @@ class Optimiser:
 
         elif trial_type == 'bayes':
             X, y = np.vstack(rt.trial_xs), np.array(rt.trial_ys)
-            model, fitting_info = self.surrogate_factory(trial_num, X, y)
+            model, fitting_info = self.surrogate.construct_model(trial_num, X, y)
             self._notify('surrogate_fitted', trial_num)
 
             acq_fun = self._get_acquisition_function(trial_num, model)

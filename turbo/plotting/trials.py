@@ -17,8 +17,10 @@ from turbo.utils import row2D, unique_rows_close
 
 #TODO: could use k-means to choose N locations to plot the surrogate through to get the best coverage of interesting regions while using as few plots as possible
 #TODO: plots could use PlottingRecorder.unfinished_trial_nums to ignore any unfinished trials. This would allow for running the optimiser in the background while plotting before the optimiser has finished.
+#TODO: color points by their trial number
 
 
+#TODO: allow this functionality to be specified by passing in the necessary information and having a list of (point, opacity) returned. Then pass in what to plot through as a parameter
 def _choose_predict_locations(trial_x, finished_xs, param_index):
     '''return a matrix with the points to predict through as rows
 
@@ -95,7 +97,7 @@ def interactive_plot_trial_1D(rec, param=None, trial_num=None, plot_in_latent_sp
             controls.children = (param_row, trial_num_w, output)
         else:
             controls.children = (param_row, output)
-    display(controls)
+    tg.display(controls)
 
 def interactive_plot_trial_2D(rec, x_param=None, y_param=None, trial_num=None, plot_in_latent_space=None, *args, **kwargs):
     '''choose the param and trial_num for the trial plot interactively
@@ -158,7 +160,7 @@ def interactive_plot_trial_2D(rec, x_param=None, y_param=None, trial_num=None, p
             controls.children = (x_param_row, y_param_row, trial_num_w, output)
         else:
             controls.children = (x_param_row, y_param_row, output)
-    display(controls)
+    tg.display(controls)
 
 
 
@@ -364,6 +366,7 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
         # optimisation that was discarded
         bayes_val = param.get_plot_val(t.bayes_x)
 
+    # TODO: can use plot_through to provide all the parameters to the function when plotting a multi-dimensional function
     if true_objective is not None:
         # true cost is either the cost function, or pre-computed costs as an array
         if callable(true_objective):
@@ -426,6 +429,7 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
         ax1.legend()
         return fig
 
+    #TODO: pull out
     def plot_prediction_through(point, label, mu_alpha, sigma_alpha):
         line = param.latent_line_through(point)
         mus, sigmas = t.model.predict(line, return_std_dev=True)
@@ -595,7 +599,7 @@ def plot_trial_2D(rec, x_param, y_param, trial_num, true_objective=None,
         ax.set_ylim(y_param.plot_bounds)
         ax.grid(False)
 
-    fig.suptitle('Bayesian Optimisation Trial {}{}'.format(trial_num, t.extra_text), fontsize=20)
+    fig.suptitle('Bayesian Optimisation Trial {}{}'.format(trial_num, t.extra_text), fontsize=20, color=t.title_color)
     # need to specify rect so that the suptitle isn't cut off
     fig.tight_layout(h_pad=3, w_pad=8, rect=[0, 0, 1, 0.96]) # [left, bottom, right, top] 0-1
 
@@ -603,6 +607,7 @@ def plot_trial_2D(rec, x_param, y_param, trial_num, true_objective=None,
     ############
     # Plotting
     ############
+    #TODO: pull out
     def plot_trials(ax):
         ax.set_xlabel(x_param.label)
         ax.set_ylabel(y_param.label)
@@ -615,8 +620,8 @@ def plot_trial_2D(rec, x_param, y_param, trial_num, true_objective=None,
                     '*', markersize=15, color='deepskyblue', zorder=10,
                     markeredgecolor='black', markeredgewidth=1.0, label='incumbent')
 
-        ax.plot(x_param.trial_val, y_param.trial_val, marker='d', color='orangered',
-                markeredgecolor='black', markeredgewidth=1.0, markersize=10,
+        ax.plot(x_param.trial_val, y_param.trial_val, marker='X', color='red',
+                markeredgecolor='black', markeredgewidth=1.0, markersize=10, zorder=11,
                 linestyle='None', label='this trial')
 
         if t.is_fallback and t.fallback_reason == 'too_close':

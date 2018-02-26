@@ -4,18 +4,64 @@ import sys
 import warnings
 import numpy as np
 import os
-import dill as pickle # regular pickle can't pickle lambdas (and has lots of other problems)
+import dill # regular pickle can't pickle lambdas (and has lots of other problems)
 import gzip
 
-def detect_pickle_problems(obj):
-    ''' use this to descend through a problematic object (manually, one level at
-    a time) to find the culprite of a failed pickle or copy
+def detect_pickle_problems(obj, quiet=False, always_check_contents=False):
+    ''' detect problems that may be encountered when trying to either save or
+    load the given object using dill (a better pickling library)
+
+    Use this tool to descend through a problematic object (manually, one level
+    at a time) to find the culprit of a failed pickle or copy.
+
+    Note: sometimes the overall object will pickle but the contents won't
+
+    Returns:
+        a list of [('save|load', attribute_name, exception_caused)]
     '''
-    for k in obj.__dict__.keys():
+    problems = []
+
+    try:
+        saved = dill.dumps(obj)
+    except Exception as e:
+        problems.append(('save', '<obj>', e))
+        print('problem saving the object')
+    try:
+        dill.loads(saved)
+    except Exception as e:
+        print('problem loading the object')
+        problems.append(('load', '<obj>', e))
+
+    if not problems and not always_check_contents:
+        return None
+
+    if hasattr(obj, '__dict__'):
+        items = list(obj.__dict__.items())
+    else:
         try:
-            dill.dumps(getattr(obj, k))
-        except Exception:
-            print('problematic attribute: {}'.format(k))
+            keys = list(iter(obj))
+            vals = [obj[k] for k in keys]
+            items = list(zip(keys, vals))
+        except TypeError: # not iterable
+            items = []
+
+    for k, v in items:
+        try:
+            saved = dill.dumps(v)
+        except Exception as e:
+            problems.append(('save', k, e))
+            if not quiet:
+                print('problem saving attribute: {}'.format(k))
+            continue
+
+        try:
+            dill.loads(saved)
+        except Exception as e:
+            problems.append(('load', k, e))
+            if not quiet:
+                print('problem loading attribute: {}'.format(k))
+
+    return problems if problems else None
 
 def save_compressed(obj, filename, overwrite=False):
     '''save the given object to a compressed file
@@ -29,12 +75,12 @@ def save_compressed(obj, filename, overwrite=False):
     if not overwrite and os.path.isfile(filename):
         raise Exception('file already exists and instructed not to overwrite: {}'.format(filename))
     with gzip.open(filename, 'wb') as f:
-        pickle.dump(obj, f, protocol=pickle.HIGHEST_PROTOCOL)
+        dill.dump(obj, f, protocol=dill.HIGHEST_PROTOCOL)
 
 def load_compressed(filename):
     ''' load an object from a compressed file created with `save_compressed()` '''
     with gzip.open(filename, 'rb') as f:
-        return pickle.load(f)
+        return dill.load(f)
 
 
 def print_err(*args, **kwargs):

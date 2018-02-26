@@ -16,11 +16,15 @@ def load_optimiser_preset(optimiser, name):
         optimiser.fallback = tm.Fallback()
         optimiser.maximise_acq = tm.random_quasi_newton()
         optimiser.async_eval = None
-        optimiser.surrogate_factory = tm.SciKitGPSurrogate.Factory(gp_params=dict(
+        optimiser.surrogate = tm.GPySurrogate()
+        '''
+        optimiser.surrogate = tm.SciKitGPSurrogate(model_params=dict(
             alpha = 1e-5, # larger => more noise. Default = 1e-10
             kernel = 1.0 * gp.kernels.Matern(nu=2.5) + gp.kernels.WhiteKernel(),
             n_restarts_optimizer = 10,
+            normalize_Y = True,
         ))
+        '''
         optimiser.acq_func_factory = tm.EI.Factory(xi=0.01)
 
     elif name == 'random_search':
@@ -32,7 +36,7 @@ def load_optimiser_preset(optimiser, name):
         optimiser.fallback = None
         optimiser.maximise_acq = None
         optimiser.async_eval = None
-        optimiser.surrogate_factory = None
+        optimiser.surrogate = None
         optimiser.acq_func_factory = None
 
     else:

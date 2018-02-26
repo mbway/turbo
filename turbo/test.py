@@ -20,7 +20,7 @@ op.pre_phase_select = tm.random_selector()
 op.maximise_acq = tm.random_quasi_newton(num_random=100, grad_restarts=5)
 op.async_eval = None
 
-op.surrogate_factory = tm.SciKitGPSurrogateFactory()
+op.surrogate = tm.GPySurrogate()
 op.acq_func_factory = tm.UCB_AcquisitionFactory(beta=lambda it: 0.5)
 
 op.run(10)
