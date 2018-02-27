@@ -78,6 +78,17 @@ class AcquisitionFunction:
             '''
             raise NotImplementedError()
 
+        def plot_parameter(self, start_trial, end_trial):
+            '''A utility function to help determine the shape of the acquisition
+            function parameter over time to help refine it.
+
+            Args:
+                start_trial (int): the trial number to start plotting at
+                end_trial (int): the trial number to start plotting at
+            '''
+            raise NotImplementedError()
+
+
 
 
 class UCB(AcquisitionFunction):
@@ -158,7 +169,13 @@ class UCB(AcquisitionFunction):
         def __call__(self, trial_num, model, desired_extremum):
             # beta can be a function or a constant
             beta = self.beta(trial_num) if callable(self.beta) else self.beta
-            return UCB(model, desired_extremum, beta)
+            acq_info = {'beta' : beta}
+            return (UCB(model, desired_extremum, beta), acq_info)
+
+        def plot_parameter(self, start_trial, end_trial):
+            beta = self.beta if callable(self.beta) else lambda trial_num: self.beta
+            from turbo.plotting.overview import _plot_acquisition_parameter
+            _plot_acquisition_parameter(beta, start_trial, end_trial)
 
 
 
@@ -246,7 +263,13 @@ class PI(AcquisitionFunction):
         def __call__(self, trial_num, model, desired_extremum, incumbent_cost):
             # xi can be a function or a constant
             xi = self.xi(trial_num) if callable(self.xi) else self.xi
-            return PI(model, desired_extremum, incumbent_cost, xi)
+            acq_info = {'xi' : xi}
+            return (PI(model, desired_extremum, incumbent_cost, xi), acq_info)
+
+        def plot_parameter(self, start_trial, end_trial):
+            xi = self.xi if callable(self.xi) else lambda trial_num: xi
+            from turbo.plotting.overview import _plot_acquisition_parameter
+            _plot_acquisition_parameter(xi, start_trial, end_trial)
 
 
 class EI(AcquisitionFunction):
@@ -357,4 +380,11 @@ class EI(AcquisitionFunction):
         def __call__(self, trial_num, model, desired_extremum, incumbent_cost):
             # xi can be a function or a constant
             xi = self.xi(trial_num) if callable(self.xi) else self.xi
-            return PI(model, desired_extremum, incumbent_cost, xi)
+            acq_info = {'xi' : xi}
+            return (PI(model, desired_extremum, incumbent_cost, xi), acq_info)
+
+        def plot_parameter(self, start_trial, end_trial):
+            xi = self.xi if callable(self.xi) else lambda trial_num: xi
+            from turbo.plotting.overview import _plot_acquisition_parameter
+            _plot_acquisition_parameter(xi, start_trial, end_trial)
+

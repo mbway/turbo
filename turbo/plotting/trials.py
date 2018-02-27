@@ -13,6 +13,7 @@ import matplotlib.transforms
 import turbo.modules as tm
 import turbo.gui as tg
 from turbo.utils import row2D, unique_rows_close
+from .config import trial_marker_colors, trial_edge_colors
 
 
 #TODO: could use k-means to choose N locations to plot the surrogate through to get the best coverage of interesting regions while using as few plots as possible
@@ -188,7 +189,7 @@ class DecodedTrial:
         if self.has_surrogate:
             self.model = info['model']
             self.acq_fun = rec.get_acquisition_function(trial_num)
-            self.acq_x = info['acq_x']
+            self.acq_x = info['maximisation_info']['max_acq']
 
         self.finished_xs = [f.x.flatten() for f in self.finished_trials] # in latent space
         self.finished_costs = [f.y for f in self.finished_trials]
@@ -323,6 +324,9 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
         n_sigma (float): the number of standard deviations from the mean to plot
             the uncertainty confidence interval.
 
+            pass 'beta' to use the beta parameter of UCB/LCB (only possible when
+            using this acquisition function)
+
             .. note::
                 for a normal distribution (i.e. GP surrogate):
                 :math:`1\implies 68\%,\;2\implies 95\%,\;3\implies 99\%`
@@ -360,6 +364,10 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
         # it makes sense to plot the acquisition function through the slice
         # corresponding to the current trial.
         acq_through_trial = t.acq_fun(param.latent_line_through(t.trial.x))
+        if n_sigma == 'beta':
+            assert isinstance(opt.acq_func_factory, tm.UCB.Factory), \
+                'n_sigma == "beta" only possible when using the UCB/LCB acquisition function'
+            n_sigma = rec.trials[trial_num].selection_info['acq_info']['beta']
 
     if t.is_fallback and t.fallback_reason == 'too_close':
         # the value of the parameter for the point selected by Bayesian
@@ -414,15 +422,15 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
     # exclude the incumbent since that is plotted separately
     if len(t.finished_trials) > 0:
         ax1.plot(np.vstack(param.finished_vals)[t.incumbent_mask,:], np.array(t.finished_costs)[t.incumbent_mask],
-                'o', markersize=6, label='finished trials', color='#213bcb', zorder=5)
+                'o', markersize=6, label='finished trials', color=trial_marker_colors['bayes'], zorder=5)
 
         ax1.plot(param.finished_vals[t.incumbent_index], t.finished_costs[t.incumbent_index],
-                '*', markersize=10, color='deepskyblue', zorder=10, label='incumbent')
+                '*', markersize=10, color=trial_marker_colors['incumbent'], zorder=10, markeredgewidth=0.5, markeredgecolor=trial_edge_colors['incumbent'], label='incumbent')
 
     ax1.axvline(x=param.trial_val, linewidth=bar_width, color=bar_color)
     if t.is_fallback and t.fallback_reason == 'too_close':
         ax1.axvline(x=bayes_val, linewidth=bar_width, color='orange')
-    ax1.plot(param.trial_val, t.trial.y, 'bo', markersize=6, alpha=0.4, label='this trial')
+    ax1.plot(param.trial_val, t.trial.y, 'bo', markersize=6, alpha=0.4, markeredgecolor=trial_edge_colors['bayes'], label='this trial')
 
     if not t.has_surrogate:
         # finish early
@@ -436,7 +444,7 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
         mu_label = r'$\mu$' if label else None
         sigma_label = r'${}\sigma$'.format(n_sigma) if label else None
 
-        ax1.plot(param.plot_range, mus, '-', color='#b544ee', label=mu_label, alpha=mu_alpha, linewidth=1.0)
+        ax1.plot(param.plot_range, mus, '-', color='#b055de', label=mu_label, alpha=mu_alpha, linewidth=1.0)
         ax1.fill_between(param.plot_range, mus - n_sigma*sigmas, mus + n_sigma*sigmas,
                         alpha=sigma_alpha, color='#c465f3', label=sigma_label)
 

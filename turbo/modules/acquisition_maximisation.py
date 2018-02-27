@@ -118,4 +118,6 @@ class random_quasi_newton:
             best_x = np.clip(best_x, low_bounds, high_bounds)
             best_y = -np.asscalar(best_y) # undo negation
 
-        return best_x, best_y, maximisation_info
+        maximisation_info.update({'max_acq' : best_y})
+
+        return (best_x, maximisation_info)

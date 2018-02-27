@@ -6,7 +6,7 @@ import numpy as np
 import turbo as tb
 import turbo.modules as tm
 
-def plot_surrogate_likelihood_over_time(rec, fig_ax=None):
+def plot_surrogate_likelihood(rec, fig_ax=None):
     fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=(10, 4)) # inches
     trial_nums = [t[0] for t in sorted(rec.trials.items())]
     # only interested in the Bayesian optimisation steps

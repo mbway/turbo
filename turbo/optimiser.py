@@ -248,12 +248,13 @@ class Optimiser:
             model, fitting_info = self.surrogate.construct_model(trial_num, X, y)
             self._notify('surrogate_fitted', trial_num)
 
-            acq_fun = self._get_acquisition_function(trial_num, model)
-            x, acq_x, maximisation_info = self.maximise_acq(lb, acq_fun)
+            acq_fun, acq_info = self._get_acquisition_function(trial_num, model)
+            x, maximisation_info = self.maximise_acq(lb, acq_fun)
             self._notify('acquisition_maximised', trial_num)
 
-            selection_info.update({'acq_x': acq_x, 'model': model,
+            selection_info.update({'model': model,
                                    'fitting_info': fitting_info,
+                                   'acq_info' : acq_info,
                                    'maximisation_info': maximisation_info})
 
             if self.fallback.point_too_close(x, X):

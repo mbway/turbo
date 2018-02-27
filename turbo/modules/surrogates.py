@@ -98,7 +98,7 @@ class GPySurrogate(Surrogate):
     default_optimise_params = {'parallel' : True, 'verbose' : False}
 
     def __init__(self, model_params=None, optimise_params=None,
-                 training_iterations=None, param_continuity=True, sparse=False):
+                 training_iterations=10, param_continuity=True, sparse=False):
         '''
         Args:
             model_params (dict): arguments to pass to the model constructor
