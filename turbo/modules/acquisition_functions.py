@@ -381,7 +381,7 @@ class EI(AcquisitionFunction):
             # xi can be a function or a constant
             xi = self.xi(trial_num) if callable(self.xi) else self.xi
             acq_info = {'xi' : xi}
-            return (PI(model, desired_extremum, incumbent_cost, xi), acq_info)
+            return (EI(model, desired_extremum, incumbent_cost, xi), acq_info)
 
         def plot_parameter(self, start_trial, end_trial):
             xi = self.xi if callable(self.xi) else lambda trial_num: xi

@@ -11,9 +11,11 @@ import matplotlib.transforms
 
 # local imports
 import turbo.modules as tm
-import turbo.gui as tg
+import turbo.gui.jupyter as tg#TODO: need to sort out this dependency
 from turbo.utils import row2D, unique_rows_close
-from .config import trial_marker_colors, trial_edge_colors
+from .config import Config
+
+#TODO: instead of calling these 'trial' plots, how about 'parameter plots'
 
 
 #TODO: could use k-means to choose N locations to plot the surrogate through to get the best coverage of interesting regions while using as few plots as possible
@@ -45,6 +47,7 @@ def _choose_predict_locations(trial_x, finished_xs, param_index):
     param_zeroed = param_zeroed[1:, :] # exclude the trial point (first row)
     return param_zeroed
 
+#TODO: move the interactive stuff to turbo.gui.jupyter where it belongs
 #TODO: instead of providing/not providing parameters to add/remove widgets. Always display the widgets but change the default value based on what is passed in
 def interactive_plot_trial_1D(rec, param=None, trial_num=None, plot_in_latent_space=None, *args, **kwargs):
     '''choose the param and trial_num for the trial plot interactively
@@ -346,6 +349,7 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
     # to catch errors where the user mistakes this for the interactive version
     assert param is not None and trial_num is not None, 'param and trial_num must be specified'
 
+    assert not rec.has_unfinished_trials()
     opt = rec.optimiser
     assert opt.async_eval is None, 'this function does not support asynchronous optimisation runs'
     max_trial_num = max(rec.trials.keys())
@@ -386,7 +390,7 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
     ##################
     # Plotting Setup
     ##################
-    fig = fig or plt.figure(figsize=(16, 10)) # inches
+    fig = fig or plt.figure(figsize=Config.fig_sizes['1D_trial'])
     grid = gridspec.GridSpec(nrows=2, ncols=1, height_ratios=[2, 1])
     ax1, ax2 = fig.add_subplot(grid[0]), fig.add_subplot(grid[1])
 
@@ -422,15 +426,15 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
     # exclude the incumbent since that is plotted separately
     if len(t.finished_trials) > 0:
         ax1.plot(np.vstack(param.finished_vals)[t.incumbent_mask,:], np.array(t.finished_costs)[t.incumbent_mask],
-                'o', markersize=6, label='finished trials', color=trial_marker_colors['bayes'], zorder=5)
+                'o', markersize=6, label='finished trials', color=Config.trial_marker_colors['bayes'], zorder=5)
 
         ax1.plot(param.finished_vals[t.incumbent_index], t.finished_costs[t.incumbent_index],
-                '*', markersize=10, color=trial_marker_colors['incumbent'], zorder=10, markeredgewidth=0.5, markeredgecolor=trial_edge_colors['incumbent'], label='incumbent')
+                '*', markersize=10, color=Config.trial_marker_colors['incumbent'], zorder=10, markeredgewidth=0.5, markeredgecolor=Config.trial_edge_colors['incumbent'], label='incumbent')
 
     ax1.axvline(x=param.trial_val, linewidth=bar_width, color=bar_color)
     if t.is_fallback and t.fallback_reason == 'too_close':
         ax1.axvline(x=bayes_val, linewidth=bar_width, color='orange')
-    ax1.plot(param.trial_val, t.trial.y, 'bo', markersize=6, alpha=0.4, markeredgecolor=trial_edge_colors['bayes'], label='this trial')
+    ax1.plot(param.trial_val, t.trial.y, 'bo', markersize=6, alpha=0.4, markeredgecolor=Config.trial_edge_colors['bayes'], label='this trial')
 
     if not t.has_surrogate:
         # finish early
@@ -549,6 +553,7 @@ def plot_trial_2D(rec, x_param, y_param, trial_num, true_objective=None,
     if tg.in_jupyter():
         assert not tg.using_svg_backend(), 'don\'t use the SVG backend with 2D plots. The results are unmanageably large files'
 
+    assert not rec.has_unfinished_trials()
     opt = rec.optimiser
     assert opt.async_eval is None, 'this function does not support asynchronous optimisation runs'
     max_trial_num = max(rec.trials.keys())
@@ -595,7 +600,7 @@ def plot_trial_2D(rec, x_param, y_param, trial_num, true_objective=None,
     # Plotting Setup
     ##################
     #TODO: profiling (with time.time()) shows that setting up the axes takes longer than plotting or setup!
-    fig = fig or plt.figure(figsize=(16, 16)) # inches
+    fig = fig or plt.figure(figsize=Config.fig_sizes['2D_trial'])
     grid = gridspec.GridSpec(nrows=2, ncols=2)
     # layout: ax1 ax2
     #         ax3 ax4
@@ -697,3 +702,4 @@ def plot_trial_2D(rec, x_param, y_param, trial_num, true_objective=None,
         legend.get_frame().set_alpha(0.5)
 
     return fig
+

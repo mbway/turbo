@@ -147,3 +147,12 @@ def remap(values, range_a, range_b):
         range_b (min, max) of the new domain
     '''
     return np.interp(values, range_a, range_b)
+
+def duration_string(seconds):
+    m, s = divmod(seconds, 60)
+    h, m = divmod(m, 60)
+    h, m = int(h), int(m)
+    if h > 0:
+        return '{}:{:02d}:{:.1f}'.format(h, m, s)
+    else:
+        return '{:02d}:{:.1f}'.format(m, s)

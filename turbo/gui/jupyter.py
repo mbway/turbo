@@ -16,15 +16,17 @@ import time
 
 # local imports
 import turbo.modules as tm
+from turbo.gui.utils import in_jupyter
 
 
-def in_jupyter():
-    ''' whether the current script is running in IPython/Jupyter '''
-    try:
-        __IPYTHON__
-    except NameError:
-        return False
-    return True
+if in_jupyter():
+    print('Setting up GUI for Jupyter')
+    # hide scroll bars that sometimes appear (apparently by chance) because the
+    # image fills the entire sub-area.
+    display(HTML('<style>div.output_subarea.output_png{'
+                 'overflow:hidden;width:100%;max-width:100%}</style>'))
+
+
 
 def jupyter_set_width(width):
     '''set the width of the central element of the notebook
@@ -33,13 +35,6 @@ def jupyter_set_width(width):
         width (str): a css string to set the width to (eg "123px" or "90%" etc)
     '''
     display(Javascript('document.getElementById("notebook-container").style.width = "{}"'.format(width)))
-
-if in_jupyter():
-    print('Setting up GUI for Jupyter')
-    # hide scroll bars that sometimes appear (apparently by chance) because the
-    # image fills the entire sub-area.
-    display(HTML('<style>div.output_subarea.output_png{'
-                 'overflow:hidden;width:100%;max-width:100%}</style>'))
 
 def jupyter_set_trace():
     '''
@@ -127,7 +122,7 @@ def figure_to_Image(fig):
     ''' save a matplotlib `Figure` as a Jupyter `Image` '''
     img = io.BytesIO()
     # default dpi is 72
-    fig.savefig(img, format='png', bbox_inches='tight')
+    fig.savefig(img, format='png', bbox_inches='tight', dpi=150)
     return Image(data=img.getvalue(), format='png', width='100%')
 
 class PlotMemoization:
@@ -204,8 +199,9 @@ def slider(values, function=None, description=None, initial=0):
     # allow negative indices e.g. values[-1]
     if initial < 0:
         initial = len(values)-initial
+    # 100% width causes a scrollbar to appear since it is too wide for the output container
     slider = widgets.IntSlider(value=initial, min=0, max=len(values)-1,
-                continuous_update=False, layout=widgets.Layout(width='100%'))
+                continuous_update=False, layout=widgets.Layout(width='98%'))
     slider.description = description
     if function is not None:
         widgets.interact(lambda i: function(values[i]), i=slider)

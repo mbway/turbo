@@ -5,9 +5,11 @@ import numpy as np
 # local imports
 import turbo as tb
 import turbo.modules as tm
+from .config import Config
 
 def plot_surrogate_likelihood(rec, fig_ax=None):
-    fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=(10, 4)) # inches
+    assert not rec.has_unfinished_trials()
+    fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=Config.fig_sizes['overview'])
     trial_nums = [t[0] for t in sorted(rec.trials.items())]
     # only interested in the Bayesian optimisation steps
     trial_nums = [t for t in trial_nums if 'model' in rec.trials[t].selection_info]
@@ -44,7 +46,8 @@ def plot_surrogate_hyper_params_1D(rec, param_index, trial_nums=None,
         axes: the values to use for the (x, y, color) axes. each axis can be one of 'trial_num', 'param', 'likelihood'
         fig_ax: the matplotlib figure and axes to plot onto
     '''
-    fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=(8, 6)) # inches
+    assert not rec.has_unfinished_trials()
+    fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=Config.fig_sizes['overview'])
     trial_nums = trial_nums or [t[0] for t in sorted(rec.trials.items())]
     # only interested in the Bayesian optimisation steps
     trial_nums = [t for t in trial_nums if 'model' in rec.trials[t].selection_info]
@@ -107,7 +110,8 @@ def plot_surrogate_hyper_params_2D(rec, param_indices=(0, 1), trial_nums=None,
         use_param_bounds: whether to set the boundaries of the plot to match the boundaries of the hyperparameter space
         fig_ax: the matplotlib figure and axes to plot onto
     '''
-    fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=(8, 6)) # inches
+    assert not rec.has_unfinished_trials()
+    fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=Config.fig_sizes['2D_surrogate'])
     x_param, y_param = param_indices
     trial_nums = trial_nums or [t[0] for t in sorted(rec.trials.items())]
     # only interested in the Bayesian optimisation steps

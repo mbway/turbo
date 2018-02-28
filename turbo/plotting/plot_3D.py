@@ -15,7 +15,8 @@ except ImportError:
     ply = None
 
 # local imports
-from turbo.gui import in_jupyter
+from turbo.gui.utils import in_jupyter
+from .config import Config
 
 
 if in_jupyter() and ply is not None:
@@ -143,7 +144,7 @@ def surface_3D_MPL(X, Y, Z):
 
     note: use `%matplotlib tk` to open 3D plots interactively
     '''
-    fig = plt.figure(figsize=(16,10))
+    fig = plt.figure(figsize=Config.fig_sizes['3D'])
     ax = fig.gca(projection='3d')
     surf = ax.plot_surface(X, Y, Z, cmap='plasma', linewidth=0, antialiased=True)
     fig.colorbar(surf)

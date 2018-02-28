@@ -4,7 +4,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 
-from .config import scatter_trials, trial_marker_colors
+from .config import Config, scatter_trials
 from turbo.modules import UCB, EI, PI
 
 
@@ -49,14 +49,15 @@ def _acquisition_parameter_name(acq_factory):
 
 
 def plot_acquisition_parameter(rec, fig_ax=None):
-    fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=(10, 4)) # inches
+    assert not rec.has_unfinished_trials()
+    fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=Config.fig_sizes['overview'])
 
     trials = rec.get_sorted_trials()
     assert trials, 'no trials'
     xs = [n for n, t in trials]
     name = _acquisition_parameter_name(rec.optimiser.acq_func_factory)
     acq_params = [t.selection_info.get('acq_info', {}).get(name, 0) for n, t in trials]
-    colors = [trial_marker_colors[t.selection_info['type']] for n, t in trials]
+    colors = [Config.trial_marker_colors[t.selection_info['type']] for n, t in trials]
 
     ax.margins(0.01, 0.05)
     ax.plot(xs, acq_params, label='acquisition parameter value')
@@ -72,13 +73,14 @@ def plot_acquisition_parameter(rec, fig_ax=None):
 
 
 def plot_acquisition_value(rec, fig_ax=None):
-    fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=(10, 4)) # inches
+    assert not rec.has_unfinished_trials()
+    fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=Config.fig_sizes['overview'])
 
     trials = rec.get_sorted_trials()
     assert trials, 'no trials'
     xs = [n for n, t in trials]
     acq = [t.selection_info.get('maximisation_info', {}).get('max_acq', 0) for n, t in trials]
-    colors = [trial_marker_colors[t.selection_info['type']] for n, t in trials]
+    colors = [Config.trial_marker_colors[t.selection_info['type']] for n, t in trials]
 
     ax.margins(0.01, 0.05)
     ax.plot(xs, acq, label='acquisition value')
@@ -93,14 +95,15 @@ def plot_acquisition_value(rec, fig_ax=None):
     return fig
 
 def plot_training_iterations(rec, fig_ax=None):
-    fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=(10, 4)) # inches
+    assert not rec.has_unfinished_trials()
+    fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=Config.fig_sizes['overview'])
 
     trials = rec.get_sorted_trials()
     assert trials, 'no trials'
     xs = [n for n, t in trials]
     fitting_infos = [t.selection_info.get('fitting_info') for n, t in trials] # None if missing
     iterations = [0 if fi is None else fi['iterations'] for fi in fitting_infos]
-    colors = [trial_marker_colors[t.selection_info['type']] for n, t in trials]
+    colors = [Config.trial_marker_colors[t.selection_info['type']] for n, t in trials]
 
     ax.margins(0.01, 0.05)
     ax.bar(xs, iterations, color=colors)
@@ -122,7 +125,8 @@ def plot_timings(rec, show_selection=True, show_eval=True, show_total=True, ylim
             get a better detailed look at that range of values (optional)
         fig_ax: the figure and axes to plot to in a tuple (optional)
     '''
-    fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=(10, 4)) # inches
+    assert not rec.has_unfinished_trials()
+    fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=Config.fig_sizes['overview'])
     assert show_selection or show_eval or show_total, 'have to show something'
 
     trials = rec.get_sorted_trials()
@@ -166,8 +170,8 @@ def plot_objective(rec, log_scale=False, ylim=None, fig_ax=None):
             get a better detailed look at that range of values (optional)
         fig_ax: the figure and axes to plot to in a tuple (optional)
     '''
-    fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=(10, 4)) # inches
-
+    assert not rec.has_unfinished_trials()
+    fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=Config.fig_sizes['overview'])
 
     trials = rec.get_sorted_trials()
     assert trials, 'no trials'
@@ -206,7 +210,8 @@ def plot_error(rec, true_best=None, log_scale=False, plot_best=False, ylim=None,
             get a better detailed look at that range of values (optional)
         fig_ax: the figure and axes to plot to in a tuple (optional)
     '''
-    fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=(10, 4)) # inches
+    assert not rec.has_unfinished_trials()
+    fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=Config.fig_sizes['overview'])
 
     trials = rec.get_sorted_trials()
     assert trials, 'no trials'

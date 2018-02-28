@@ -118,8 +118,12 @@ class Optimiser:
         self._listeners = [l for l in self._listeners if l != listener]
         listener.unregistered()
 
-    def get_incumbent(self):
+    def get_incumbent(self, as_dict=False):
         '''get the current best trial
+
+        Args:
+            as_dict (bool): True => return the trial input as a dict in the input space
+                            False => return the trial as a point in the latent space
 
         Returns:
             (i, x, y)
@@ -129,7 +133,10 @@ class Optimiser:
         '''
         rt = self.rt
         i = np.argmax(rt.trial_ys) if self.is_maximising() else np.argmin(rt.trial_ys)
-        return (i, rt.trial_xs[i], rt.trial_ys[i])
+        x = rt.trial_xs[i]
+        if as_dict:
+            x = self._point_to_dict(self.latent_space.from_latent(x))
+        return (i, x, rt.trial_ys[i])
 
     def run(self, max_trials):
         if self.async_eval is None:

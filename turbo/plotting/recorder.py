@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
+import os
 import time
+import datetime
 import numpy as np
 
 import turbo as tb
@@ -41,27 +43,57 @@ class PlottingRecorder(tm.Listener):
         def is_fallback(self):
             return self.selection_info['type'] == 'fallback'
 
-    def __init__(self, optimiser=None):
+    class Run:
+        def __init__(self, previously_finished, max_trials):
+            self.start_date = datetime.datetime.now()
+            self.finish_date = None
+            self.previously_finished = previously_finished
+            self.max_trials = max_trials
+
+        def finish(self):
+            self.finish_date = datetime.datetime.now()
+
+        def is_finished(self):
+            return self.finish_date is not None
+
+        @property
+        def duration(self):
+            return None if self.finish_date is None else (self.finish_date-self.start_date).total_seconds()
+
+        @property
+        def num_trials(self):
+            return self.max_trials-self.previously_finished
+
+
+    def __init__(self, optimiser=None, description=None, autosave_filename=None):
         '''
         Args:
             optimiser: (optional) the optimiser to register with, otherwise
                 `Optimiser.register_listener()` should be called with this
                 object as an argument in order to receive messages.
+            description (str): a long-form explanation of what was being done
+                during this run (eg the details of the experiment set up) to
+                give more information than the filename alone can provide.
+            autosave_filename (str): when provided, save the recorder to this
+                file every time a trial is finished. This allows the user to do
+                plotting before the optimisation process has finished. The file
+                must not already exist.
         '''
+        self.runs = []
         self.trials = {}
-        self.description = None
+        self.description = description
         self.unfinished_trial_nums = set()
         self.optimiser = optimiser
         if optimiser is not None:
             optimiser.register_listener(self)
+        self.autosave_filename = autosave_filename
+        if autosave_filename is not None:
+            assert not os.path.exists(autosave_filename), 'file "{}" already exists!'.format(autosave_filename)
 
-    def save_compressed(self, filename, description=None, overwrite=False):
+    def save_compressed(self, filename, overwrite=False):
         ''' save the recorder to a file which can be loaded later and used for plotting
 
         Args:
-            description (str): a long-form explanation of what was being done
-                during this run (eg the details of the experiment set up) to
-                give more information than the filename alone can provide.
             overwrite (bool): whether to overwrite the file if it already exists
 
         Note:
@@ -71,7 +103,6 @@ class PlottingRecorder(tm.Listener):
         '''
         opt = self.optimiser
         assert opt is not None
-        assert not opt.rt.running
 
         listeners = opt._listeners
         objective = opt.objective
@@ -85,8 +116,6 @@ class PlottingRecorder(tm.Listener):
             problems = tb.utils.detect_pickle_problems(self, quiet=True)
             assert not problems, 'problems detected: {}'.format(problems)
 
-            if description is not None:
-                self.description = description
             tb.utils.save_compressed(self, filename, overwrite)
         finally:
             opt._listeners = listeners
@@ -95,15 +124,32 @@ class PlottingRecorder(tm.Listener):
     @staticmethod
     def load_compressed(filename, quiet=False):
         rec = tb.utils.load_compressed(filename)
-        if not quiet and rec.description is not None:
-            print('Recorder loaded with description:')
-            print(rec.description)
+        if not quiet:
+            print('Recorder loaded:')
+            print(rec.get_summary())
         return rec
+
+    def get_summary(self):
+        s = '{} trials over {} run{}\n'.format(len(self.trials), len(self.runs), 's' if len(self.runs) > 1 else '')
+        for i, r in enumerate(self.runs):
+            if r.is_finished():
+                s += 'run {}: {} trials in {}, started {}\n'.format(i, r.num_trials, tb.utils.duration_string(r.duration), r.start_date)
+            else:
+                s += 'run {}: unfinished\n'.format(i)
+        if self.unfinished_trial_nums:
+            s += 'unfinished trials: {}\n'.format(self.unfinished_trial_nums)
+        s += 'description:\n{}\n'.format(self.description)
+        return s
+
 
     def registered(self, optimiser):
         assert self.optimiser is None or self.optimiser == optimiser, \
             'cannot use the same PlottingRecorder with multiple optimisers'
         self.optimiser = optimiser
+
+    def run_started(self, finished_trials, max_trials):
+        r = PlottingRecorder.Run(finished_trials, max_trials)
+        self.runs.append(r)
 
     def selection_started(self, trial_num):
         assert trial_num not in self.trials.keys()
@@ -129,6 +175,14 @@ class PlottingRecorder(tm.Listener):
         t.eval_info = eval_info
         t.eval_time = time.time() - t.eval_time
         self.unfinished_trial_nums.remove(trial_num)
+        if self.autosave_filename is not None:
+            self.save_compressed(self.autosave_filename, overwrite=True)
+
+    def run_finished(self):
+        r = self.runs[-1]
+        r.finish()
+        if self.autosave_filename is not None:
+            self.save_compressed(self.autosave_filename, overwrite=True)
 
 
 
@@ -171,8 +225,12 @@ class PlottingRecorder(tm.Listener):
         return acq_fun
 
     def remove_unfinished(self):
-        ''' remove any unfinished trials. This is useful for still being able to plot after interrupting an Optimiser before it finished '''
+        ''' remove any unfinished trials. This is useful for still being able to
+        plot after interrupting an Optimiser before it finished
+        '''
         for trial_num in self.unfinished_trial_nums:
             del self.trials[trial_num]
         self.unfinished_trial_nums = set()
 
+    def has_unfinished_trials(self):
+        return len(self.unfinished_trial_nums) > 0
