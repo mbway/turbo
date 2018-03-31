@@ -119,3 +119,24 @@ def setup_ctrl_c():
     '''handle Ctrl+C using the default signal handler, allowing the Qt application to be closed with Ctrl+C'''
     # DFL = 'default signal handler'
     signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+
+def qt_app_helper(optimiser, do_optimisation):
+    '''a convenience function to start a Qt GUI to observe the optimisation
+    Args:
+        optimiser: the optimiser to track with the GUI
+        do_optimisation: a function which performs the optimisation and saves any results etc.
+    '''
+    app = qt.QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(True) # have to wait for the recorder to save
+
+    gui = tg.OverviewWindow(optimiser)
+
+    # need to do optimisation on another thread so that Qt messages can be processed
+    t = tg.Thread(target=do_optimisation)
+    t.start()
+
+    tg.setup_ctrl_c() # Ctrl+C to close the application
+
+    sys.exit(app.exec_())
+
