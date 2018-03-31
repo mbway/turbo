@@ -39,13 +39,16 @@ class OverviewWindow(qt.QWidget, tm.Listener):
 
     state_changed = qtc.pyqtSignal()
 
+    #TODO: might want to remove close_on_run_finish entirely
     def __init__(self, optimiser, close_on_run_finish=False):
         '''
         Args:
             close_on_run_finish (bool): whether to close the window and so the
                 application when the optimisation finishes. This can be
                 dangerous if you want to do other tasks such as saving the
-                results after the optimisation has finished.
+                results after the optimisation has finished. Note that the
+                run_finished event may be handled by multiple listeners and this
+                isn't guaranteed to be the last one.
         '''
         super().__init__()
         grid = qt.QGridLayout()
@@ -121,11 +124,11 @@ def setup_ctrl_c():
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 
-def qt_app_helper(optimiser, do_optimisation):
+def qt_app_helper(optimiser, do_optimisation, close_on_finish=True):
     '''a convenience function to start a Qt GUI to observe the optimisation
     Args:
         optimiser: the optimiser to track with the GUI
-        do_optimisation: a function which performs the optimisation and saves any results etc.
+        do_optimisation: a function which takes no arguments and performs the optimisation and saves any results etc.
     '''
     app = qt.QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True) # have to wait for the recorder to save
@@ -133,7 +136,14 @@ def qt_app_helper(optimiser, do_optimisation):
     gui = OverviewWindow(optimiser)
 
     # need to do optimisation on another thread so that Qt messages can be processed
-    t = Thread(target=do_optimisation)
+    def do():
+        do_optimisation()
+        # This is safer than using the run_finished callback since not all of
+        # the listeners may have finished processing and do_optimisation might
+        # want to perform actions after the run finishes (like saving results)
+        if close_on_finish:
+            gui.close()
+    t = Thread(target=do)
     t.start()
 
     setup_ctrl_c() # Ctrl+C to close the application
