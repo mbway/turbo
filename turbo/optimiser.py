@@ -118,6 +118,33 @@ class Optimiser:
         self._listeners = [l for l in self._listeners if l != listener]
         listener.unregistered()
 
+    def load_trials(self, trials):
+        '''
+        Args:
+            trials (PlottingRecorder.Trial): a list of trials to load
+        '''
+        assert all(trial.x.shape == (1, len(self.bounds)) for trial in trials)
+        assert not self.rt.running
+
+        self.latent_space.set_input_bounds(self.bounds)
+        self._check_settings()
+        rt = self.rt # runtime data
+        rt.running = True
+        rt.max_trials = rt.finished_trials + len(trials)
+
+        self._notify('run_started', rt.finished_trials, rt.max_trials)
+        trial_num = self.rt.finished_trials
+        for trial in trials:
+            rt.started_trials += 1
+            self._notify('selection_started', trial_num)
+            self._notify('selection_finished', trial_num, trial.x, trial.selection_info)
+            self._notify('eval_started', trial_num)
+            rt.add_finished_trial(trial.x, trial.y)
+            self._notify('eval_finished', trial_num, trial.y, trial.eval_info)
+            trial_num += 1
+        rt.running = False
+        self._notify('run_finished')
+
     def get_incumbent(self, as_dict=False):
         '''get the current best trial
 
@@ -165,6 +192,8 @@ class Optimiser:
             res = self.objective(**params_dict)
             # the objective function may either return a float, or a tuple of (cost, eval_info)
             y, eval_info = res if isinstance(res, tuple) else (res, None)
+            if isinstance(y, int):
+                y = float(y)
             assert isinstance(y, float), 'objective function should return a float for the cost, instead: {}'.format(type(y))
 
             #TODO: assert that y is the correct type and not None, NaN or infinity

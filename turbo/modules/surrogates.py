@@ -139,6 +139,8 @@ class GPySurrogate(Surrogate):
             'cannot specify num_restarts and training_iterations at the same time'
         self.param_continuity = param_continuity
         self.sparse = sparse
+        if self.sparse:
+            assert 'kernel' in self.model_params, 'sparse GP does not specify a kernel by default, so must be specified manually!'
 
         self._last_model_params = None
 

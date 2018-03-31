@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 
 import numpy as np
-from math import inf # TODO: python2 compatibility
+try:
+    from math import inf
+except ImportError:
+    inf = float('inf')
 import warnings
 import scipy.optimize
 

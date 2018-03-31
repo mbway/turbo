@@ -12,8 +12,9 @@ def load_optimiser_preset(optimiser, name):
         # this default should hopefully provide reasonable results in most situations
         # the Optimiser.Plan defaults are left alone
         optimiser.latent_space = tm.NoLatentSpace()
-        optimiser.pre_phase_select = tm.random_selector()
-        optimiser.fallback = tm.Fallback()
+        pre_phase = optimiser.pre_phase_trials
+        optimiser.pre_phase_select = tm.LHS_selector(num_total=pre_phase)
+        optimiser.fallback = tm.Fallback(selector=tm.random_selector())
         optimiser.maximise_acq = tm.random_quasi_newton()
         optimiser.async_eval = None
         optimiser.surrogate = tm.GPySurrogate()

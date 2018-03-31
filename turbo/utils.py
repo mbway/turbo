@@ -16,6 +16,8 @@ def detect_pickle_problems(obj, quiet=False, always_check_contents=False):
 
     Note: sometimes the overall object will pickle but the contents won't
 
+    also look into things like dill.detect.trace(True); dill.detect.errors(obj)
+
     Returns:
         a list of [('save|load', attribute_name, exception_caused)]
     '''

@@ -683,7 +683,7 @@ def plot_trial_2D(rec, x_param, y_param, trial_num, true_objective=None,
 
     if true_objective is not None:
         ax2.set_title('True Objective', fontsize=title_size)
-        plot_heatmap(ax2, true_costs, colorbar=True, cmap=cmap_match_direction)
+        plot_heatmap(ax2, true_costs, colorbar=True, cmap=cmap_match_direction, norm=mu_norm)
         plot_trials(ax2)
 
     ax3.set_title(r'Surrogate $\sigma$', fontsize=title_size)

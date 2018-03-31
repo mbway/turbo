@@ -39,7 +39,14 @@ class OverviewWindow(qt.QWidget, tm.Listener):
 
     state_changed = qtc.pyqtSignal()
 
-    def __init__(self, optimiser, close_on_run_finish=True):
+    def __init__(self, optimiser, close_on_run_finish=False):
+        '''
+        Args:
+            close_on_run_finish (bool): whether to close the window and so the
+                application when the optimisation finishes. This can be
+                dangerous if you want to do other tasks such as saving the
+                results after the optimisation has finished.
+        '''
         super().__init__()
         grid = qt.QGridLayout()
         grid.setSpacing(2)

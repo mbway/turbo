@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+import numpy as np
+
 from turbo.utils import close_to_any
 
 class Fallback:
@@ -21,9 +23,10 @@ class Fallback:
             causing a Bayesian optimisation trial to be discarded and the
             fallback method used instead (not planned) (0.0 to disable)
     '''
-    def __init__(self, planned_fallback=None, close_tolerance=1e-10):
+    def __init__(self, planned_fallback=None, close_tolerance=1e-10, selector=None):
         self.planned_fallback = planned_fallback
         self.close_tolerance = close_tolerance
+        self.selector = selector
         self._last_planned_fallback = -1
 
     def fallback_is_planned(self, trial_num):
@@ -51,7 +54,8 @@ class Fallback:
     def select_trial(self, optimiser, trial_num):
         ''' select a trial using the fallback method '''
         lb = optimiser.latent_space.get_latent_bounds()
-        return optimiser.pre_phase_select(num_points=1, latent_bounds=lb)
+        selector = self.selector or optimiser.pre_phase_select
+        return selector(num_points=1, latent_bounds=lb)
 
 
     @staticmethod

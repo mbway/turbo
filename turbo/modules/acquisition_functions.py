@@ -10,6 +10,7 @@ from turbo.utils import *
 
 #TODO: look at gpyopt for guidance doing acquisition function gradients
 #TODO: by looking at gpyopt, it looks like acquisition functions have to change calculations when doing MCMC, I think this is best detected by whether surrogate.predict returns a single answer or several.
+#TODO: like the surrogates, make just EI, UCB ect be the factories and have 'Instances'
 
 class AcquisitionFunction:
     ''' A function which is used to determine the best place to sample next
@@ -267,7 +268,7 @@ class PI(AcquisitionFunction):
             return (PI(model, desired_extremum, incumbent_cost, xi), acq_info)
 
         def plot_parameter(self, start_trial, end_trial):
-            xi = self.xi if callable(self.xi) else lambda trial_num: xi
+            xi = self.xi if callable(self.xi) else lambda trial_num: self.xi
             from turbo.plotting.overview import _plot_acquisition_parameter
             _plot_acquisition_parameter(xi, start_trial, end_trial)
 
@@ -384,7 +385,7 @@ class EI(AcquisitionFunction):
             return (EI(model, desired_extremum, incumbent_cost, xi), acq_info)
 
         def plot_parameter(self, start_trial, end_trial):
-            xi = self.xi if callable(self.xi) else lambda trial_num: xi
+            xi = self.xi if callable(self.xi) else lambda trial_num: self.xi
             from turbo.plotting.overview import _plot_acquisition_parameter
             _plot_acquisition_parameter(xi, start_trial, end_trial)
 

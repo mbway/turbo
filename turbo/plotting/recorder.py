@@ -8,6 +8,23 @@ import numpy as np
 import turbo as tb
 import turbo.modules as tm
 
+#TODO: I have decided that pickling is a totally inappropriate serialisation method for this data for the following reasons (note them down in the documentation)
+# - if the code which created the optimiser changes (eg file deleted) then the pickled data CANNOT BE LOADED!
+#   as a fix, can use sys.modules['old_module'] = new_module
+#   if the module has moved and hasn't changed much
+# - the data isn't human readable
+# - the data isn't readable by any other tool
+# - the data isn't guaranteed to last between python versions
+# - it introduces dill as a dependency
+# - the data isn't readable if turbo changes particular classes (like Trial for example)
+#
+# Potential fix:
+# write a way for the optimiser to be initialised from a static configuration file / dictionary. That way only static data has to be stored
+# then it will be trivial to store using JSON or a binary serialisation method
+# can use inspect to get the source code for functions like `beta = lambda trial_num: np.log(trial_num)` and save as strings
+# could use dis to get the bytecode instead perhaps? Either way, save as something which can be re-loaded. Or perhaps pickle just the function stuff and store it as a string inside the JSON file or whatever
+
+
 #TODO: probably should move out of plotting and have it at the root called something else. Recorder or TrialRecorder or something?
 class PlottingRecorder(tm.Listener):
     ''' A listener which records data about the trials of an optimiser for plotting later
@@ -86,9 +103,15 @@ class PlottingRecorder(tm.Listener):
         self.optimiser = optimiser
         if optimiser is not None:
             optimiser.register_listener(self)
+        if autosave_filename is not None and os.path.exists(autosave_filename):
+            base_filename = autosave_filename
+            suffix = 1
+            while os.path.exists(autosave_filename):
+                autosave_filename = '{}_{}'.format(base_filename, suffix)
+                suffix += 1
+            print('the file "{}" already exists, using "{}" instead'.format(base_filename, autosave_filename))
         self.autosave_filename = autosave_filename
-        if autosave_filename is not None:
-            assert not os.path.exists(autosave_filename), 'file "{}" already exists!'.format(autosave_filename)
+
 
     def save_compressed(self, filename, overwrite=False):
         ''' save the recorder to a file which can be loaded later and used for plotting
@@ -116,7 +139,15 @@ class PlottingRecorder(tm.Listener):
             problems = tb.utils.detect_pickle_problems(self, quiet=True)
             assert not problems, 'problems detected: {}'.format(problems)
 
-            tb.utils.save_compressed(self, filename, overwrite)
+            while True:
+                try:
+                    tb.utils.save_compressed(self, filename, overwrite)
+                    break
+                except Exception as e:
+                    print('in save_compressed:')
+                    print(e)
+                    input('press enter to try again')
+
         finally:
             opt._listeners = listeners
             opt.objective = objective
@@ -191,6 +222,11 @@ class PlottingRecorder(tm.Listener):
     def get_sorted_trials(self):
         ''' return a list of (trial_num, Trial) sorted by trial_num (and so sorted by start time) '''
         return sorted(self.trials.items())
+
+    def get_ranked_trials(self):
+        ''' return a list of (trial_num, Trial) sorted by cost (best first)  '''
+        maximising = self.optimiser.is_maximising()
+        return sorted(self.trials.items(), key=lambda item: -item[1].y if maximising else item[1].y)
 
     def get_incumbent(self):
         trials = self.get_sorted_trials()

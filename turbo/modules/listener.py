@@ -7,8 +7,8 @@ class Listener:
         - registered
         - run_started
             - selection_started
-                - fitting_surrogate (possibly)
-                - maximising_acq (possibly)
+                - surrogate_fitted (possibly)
+                - acquisition_maximised (possibly)
             - selection_finished
             - eval_started
         - eval_finished (some time later, others may have started in the meantime)
@@ -54,6 +54,7 @@ class Listener:
                 occurred, which can be determined by the value of
                 `selection_info['type']`
         '''
+    #TODO: rename to evaluation_started since all the others are written out in full
     def eval_started(self, trial_num):
         '''Called once the trial point `x` has been selected and evaluation will begin '''
         pass
