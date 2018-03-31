@@ -130,13 +130,13 @@ def qt_app_helper(optimiser, do_optimisation):
     app = qt.QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True) # have to wait for the recorder to save
 
-    gui = tg.OverviewWindow(optimiser)
+    gui = OverviewWindow(optimiser)
 
     # need to do optimisation on another thread so that Qt messages can be processed
-    t = tg.Thread(target=do_optimisation)
+    t = Thread(target=do_optimisation)
     t.start()
 
-    tg.setup_ctrl_c() # Ctrl+C to close the application
+    setup_ctrl_c() # Ctrl+C to close the application
 
     sys.exit(app.exec_())
 
