@@ -355,11 +355,11 @@ class SciKitGPSurrogate(Surrogate):
             params = k.get_params() # dictionary containing things which aren't just the hyperparameters
             names = []
             for h in k.hyperparameters:
-                num_vals = len(params[h.name])
-                if num_vals == 1:
-                    names.append(h.name)
+                p = params[h.name]
+                if isinstance(p, np.ndarray):
+                    names.extend(['{}_{}'.format(h.name, i) for i in range(len(p.tolist()))])
                 else:
-                    names.extend(['{}_{}'.format(h.name, i) for i in range(num_vals)])
+                    names.append(h.name)
             return names
 
         def get_log_likelihood(self):
