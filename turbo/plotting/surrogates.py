@@ -60,6 +60,7 @@ def plot_surrogate_hyper_params_1D(rec, param_index, trial_nums=None,
     hyper_params = np.array([m.get_hyper_params() for m in models])
     # assume the kernel (and so the bounds and names) don't change
     names = m0.get_hyper_param_names()
+    assert len(names) == len(hyper_params)
     likelihoods = np.array([m.get_log_likelihood() for m in models])
 
     if isinstance(m0, tm.SciKitGPSurrogate.ModelInstance):

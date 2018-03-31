@@ -151,8 +151,12 @@ class LogMap(ConstantMap):
                 outside of the input space range to avoid crashing.
         '''
         self.zero_point = zero_point
-    def input_to_latent(self, param): return math.log(param-self.zero_point)
-    def latent_to_input(self, param): return math.exp(param)+self.zero_point
+    def input_to_latent(self, param):
+        assert self.input_range[0] <= param <= self.input_range[1]
+        return math.log(param-self.zero_point)
+    def latent_to_input(self, param):
+        assert self.latent_range[0] <= param <= self.latent_range[1]
+        return math.exp(param)+self.zero_point
 
 class LinearMap(ConstantMap):
     '''linearly remap the input space boundaries to the given boundaries
@@ -167,12 +171,17 @@ class LinearMap(ConstantMap):
             input_space_range (tuple): (input_space_min, input_space_max)
             latent_space_range (tuple): (latent_space_min, latent_space_max)
         '''
+        assert len(input_space_range) == len(latent_space_range) == 2, 'invalid ranges'
         self.input_range = input_space_range
         self.latent_range = latent_space_range
     def input_to_latent(self, param):
+        assert self.input_range[0] <= param <= self.input_range[1]
         return remap(param, self.input_range, self.latent_range)
     def latent_to_input(self, param):
+        assert self.latent_range[0] <= param <= self.latent_range[1]
         return remap(param, self.latent_range, self.input_range)
+
+#TODO: make helper functions which generate constant latent spaces mapping to hypercubes centered at the origin or over the range [0,1]
 
 
 class ConstantLatentSpace(LatentSpace):

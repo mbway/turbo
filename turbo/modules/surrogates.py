@@ -339,12 +339,28 @@ class SciKitGPSurrogate(Surrogate):
                 return res.flatten()
 
         def get_hyper_params(self):
-            # theta is log transformed
-            return np.exp(self.model.kernel_.theta.copy())
+            # obtained by examining the theta property of `Kernel` in scikit learn
+            k = self.model.kernel_
+            params = k.get_params() # dictionary containing things which aren't just the hyperparameters
+            vals = []
+            for h in k.hyperparameters:
+                if not h.fixed:
+                    vals.append(params[h.name]) # may be scalar or list
+            return np.hstack(vals) if len(vals) > 0 else np.array([])
 
         def get_hyper_param_names(self):
+            # some hyperparameters are lists rather than scalars (eg with ARD kernel)
+            # so have to add N copies of the hyperparameter name to make the indices line up
             k = self.model.kernel_
-            return [h.name for h in k.hyperparameters]
+            params = k.get_params() # dictionary containing things which aren't just the hyperparameters
+            names = []
+            for h in k.hyperparameters:
+                num_vals = len(params[h.name])
+                if num_vals == 1:
+                    names.append(h.name)
+                else:
+                    names.extend(['{}_{}'.format(h.name, i) for i in range(num_vals)])
+            return names
 
         def get_log_likelihood(self):
             return self.model.log_marginal_likelihood()
