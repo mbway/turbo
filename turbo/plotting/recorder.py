@@ -17,6 +17,7 @@ import turbo.modules as tm
 # - the data isn't guaranteed to last between python versions
 # - it introduces dill as a dependency
 # - the data isn't readable if turbo changes particular classes (like Trial for example)
+# - the save cannot be loaded easily from another directory because the modules for the original source code will not be present!
 #
 # Potential fix:
 # write a way for the optimiser to be initialised from a static configuration file / dictionary. That way only static data has to be stored
@@ -228,8 +229,14 @@ class PlottingRecorder(tm.Listener):
         maximising = self.optimiser.is_maximising()
         return sorted(self.trials.items(), key=lambda item: -item[1].y if maximising else item[1].y)
 
-    def get_incumbent(self):
+    def get_incumbent(self, up_to=None):
+        '''
+        Args:
+            up_to (int): the incumbent for the trials up to and including this trial number. Pass None to include all trials.
+        '''
         trials = self.get_sorted_trials()
+        if up_to is not None:
+            trials = trials[:up_to+1]
         assert trials, 'no trials'
         costs = [t.y for n, t in trials]
         i = np.argmax(costs) if self.optimiser.is_maximising() else np.argmin(costs)

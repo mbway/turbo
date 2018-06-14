@@ -25,6 +25,8 @@ TODO
 - https://github.com/automl/RoBO
 - https://github.com/resibots/limbo
 
+# Black Box Optimisation Benchmarking Procedure
+<http://coco.lri.fr/COCOdoc/bbo_experiment.html>
 
 # Contents (in chronological order) #
 First I experimented with tensorflow and Jupyter, then a simple MC-dropout implementation

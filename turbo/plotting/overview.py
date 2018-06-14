@@ -14,7 +14,8 @@ def plot_overview(rec):
     # minimising so only plot both when minimising
     if rec.optimiser.is_maximising():
         plot_objective(rec)
-    plot_error(rec)
+    plot_error(rec, best_so_far=False)
+    plot_error(rec, best_so_far=True)
     plot_timings(rec)
     plot_acquisition_value(rec)
     plot_acquisition_parameter(rec)
@@ -197,7 +198,7 @@ def plot_objective(rec, log_scale=False, ylim=None, fig_ax=None):
     ax.legend()
     return fig
 
-def plot_error(rec, true_best=None, log_scale=False, plot_best=False, ylim=None, fig_ax=None):
+def plot_error(rec, true_best=None, log_scale=False, plot_best=False, best_so_far=False, ylim=None, fig_ax=None):
     '''plot a line graph showing the difference between the known optimal value
     and the optimiser's best guess for each trial.
 
@@ -206,6 +207,7 @@ def plot_error(rec, true_best=None, log_scale=False, plot_best=False, ylim=None,
         true_best (float): the globally optimal value to compare to. If not provided: the incumbent is used
         log_scale: whether to plot on a logarithmic or a linear scale
         plot_best: whether to plot a marker showing the trial with the overall best cost
+        best_so_far: whether to plot the error for each trial, or the best error up until and including that trial
         ylim: when specified, set the limits of the y/cost axis to
             get a better detailed look at that range of values (optional)
         fig_ax: the figure and axes to plot to in a tuple (optional)
@@ -221,6 +223,10 @@ def plot_error(rec, true_best=None, log_scale=False, plot_best=False, ylim=None,
     xs = [n for n, t in trials]
     errors = [(true_best - t.y if rec.optimiser.is_maximising() else t.y - true_best)
               for n, t in trials]
+
+    # not efficient, but it works
+    if best_so_far:
+        errors = [np.min(errors[:i+1]) for i in range(len(errors))]
 
     if any(e < 0 for e in errors):
         print('warning: some of the trials are better than true_best!')
@@ -243,7 +249,7 @@ def plot_error(rec, true_best=None, log_scale=False, plot_best=False, ylim=None,
                 markeredgewidth=1, label='best cost', transform=trans)
         ax.margins(0.01, 0.1) # need more margins to fit the marker in
 
-    ax.set_title('Error For Each Trial', fontsize=14)
+    ax.set_title('Best Error Until Each Trial' if best_so_far else 'Error For Each Trial', fontsize=14)
     ax.set_xlabel('trial num')
     ax.set_ylabel('error')
 

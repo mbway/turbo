@@ -1,6 +1,6 @@
 #!/bin/bash
 
-coverage run --source=../optimisation ./optimisation_tests.py
+coverage run --source=../turbo ./tests.py
 # text report to stdout
 #coverage report -m
 coverage html

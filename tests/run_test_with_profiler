@@ -1,4 +1,4 @@
 #!/bin/bash
 
-python3 -m cProfile -s cumulative optimisation_tests.py > profile_res
+python3 -m cProfile -s cumulative tests.py > profile_res
 

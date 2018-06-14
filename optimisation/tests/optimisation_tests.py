@@ -43,11 +43,12 @@ def log(self, s):
 ```
 
 '''
-# python 2 compatibility
-from __future__ import (absolute_import, division, print_function, unicode_literals)
+
+#TODO: fix these tests
+
+
 import sys
 sys.path.append('..')
-from optimisation.py2 import * # python 2 compatibility
 
 import unittest
 

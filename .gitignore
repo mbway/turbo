@@ -1,11 +1,13 @@
 # programming mess
 *.swp
 tags
+.idea
 
 # runtime mess
 .ipynb_checkpoints/
 *.pyc
 build/
+tests/turbo
 
 # generated documentation
 docs/build/

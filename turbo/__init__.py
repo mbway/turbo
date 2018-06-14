@@ -1,4 +1,4 @@
-''' turbo: Modular Bayesian Optimisation '''
+""" turbo: Modular Bayesian Optimisation """
 
 from .bounds import Bounds
 from .optimiser import Optimiser
