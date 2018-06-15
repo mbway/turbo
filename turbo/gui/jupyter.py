@@ -108,7 +108,7 @@ class OptimiserProgressBar(tm.Listener):
         this_run = max_trials - finished_trials
         self.bar = LabelledProgressBar(0, this_run, initial_value=0,
                                        label_prefix='Finished Trials: ')
-    def eval_finished(self, trial_num, y, eval_info):
+    def evaluation_finished(self, trial_num, y, eval_info):
         self.bar.increment()
     def run_finished(self):
         if self.close_when_complete:

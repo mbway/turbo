@@ -12,7 +12,7 @@ import matplotlib.transforms
 # local imports
 import turbo.modules as tm
 import turbo.gui.jupyter as tg#TODO: need to sort out this dependency
-from turbo.utils import row2D, unique_rows_close
+from turbo.utils import row_2d, unique_rows_close
 from .config import Config
 
 #TODO: instead of calling these 'trial' plots, how about 'parameter plots'
@@ -41,7 +41,7 @@ def _choose_predict_locations(trial_x, finished_xs, param_index):
     # a copy of the current samples with the focused parameter zeroed
     # start with s.next_x since that is a point which is guaranteed to
     # have a prediction plotted through it
-    param_zeroed = np.vstack([row2D(trial_x)] + finished_xs)
+    param_zeroed = np.vstack([row_2d(trial_x)] + finished_xs)
     param_zeroed[:, param_index] = 0
     param_zeroed = unique_rows_close(param_zeroed, close_tolerance=1e-3)
     param_zeroed = param_zeroed[1:, :] # exclude the trial point (first row)
@@ -208,7 +208,7 @@ class DecodedTrial:
         elif plot_through == 'trial':
             self.plot_through = self.trial.x
         elif plot_through == 'incumbent':
-            self.plot_through = row2D(self.finished_xs[self.incumbent_index])
+            self.plot_through = row_2d(self.finished_xs[self.incumbent_index])
         else:
             raise ValueError(plot_through)
 
@@ -293,7 +293,7 @@ class DecodedParam:
         '''
         latent_range = self.latent_range.flatten()
         # create many duplicates of the given point
-        points = np.repeat(row2D(point), len(latent_range), axis=0)
+        points = np.repeat(row_2d(point), len(latent_range), axis=0)
         points[:,self.latent_index] = latent_range
         return points
 
@@ -466,7 +466,7 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
             # cap to make sure they don't become invisible
             alpha = max(0.4/locs.shape[0], 0.015)
             for p in locs:
-                plot_prediction_through(row2D(p), label=False, mu_alpha=alpha, sigma_alpha=alpha)
+                plot_prediction_through(row_2d(p), label=False, mu_alpha=alpha, sigma_alpha=alpha)
 
     #############
     # Bottom Axes
@@ -526,7 +526,7 @@ class Decoded2Params:
             a matrix with the points as rows
         '''
         # create many duplicates of the given point
-        points = np.repeat(row2D(point), self.latent_points.shape[0], axis=0)
+        points = np.repeat(row_2d(point), self.latent_points.shape[0], axis=0)
         points[:,self.x.latent_index] = self.latent_points[:,0]
         points[:,self.y.latent_index] = self.latent_points[:,1]
         return points

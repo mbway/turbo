@@ -28,7 +28,7 @@ import turbo.modules as tm
 
 #TODO: probably should move out of plotting and have it at the root called something else. Recorder or TrialRecorder or something?
 class PlottingRecorder(tm.Listener):
-    ''' A listener which records data about the trials of an optimiser for plotting later
+    """ A listener which records data about the trials of an optimiser for plotting later
 
     Note: design justification: recorders are required because the optimiser
         only keeps track of the data it needs to perform the optimisation (for
@@ -39,7 +39,7 @@ class PlottingRecorder(tm.Listener):
 
     Attributes:
         trials: a list of Trial objects recorded from the optimiser
-    '''
+    """
     class Trial:
         def __init__(self):
             self.trial_num = None
@@ -56,8 +56,10 @@ class PlottingRecorder(tm.Listener):
 
         def is_pre_phase(self):
             return self.selection_info['type'] == 'pre_phase'
+
         def is_bayes(self):
             return self.selection_info['type'] == 'bayes'
+
         def is_fallback(self):
             return self.selection_info['type'] == 'fallback'
 
@@ -82,9 +84,8 @@ class PlottingRecorder(tm.Listener):
         def num_trials(self):
             return self.max_trials-self.previously_finished
 
-
     def __init__(self, optimiser=None, description=None, autosave_filename=None):
-        '''
+        """
         Args:
             optimiser: (optional) the optimiser to register with, otherwise
                 `Optimiser.register_listener()` should be called with this
@@ -96,7 +97,7 @@ class PlottingRecorder(tm.Listener):
                 file every time a trial is finished. This allows the user to do
                 plotting before the optimisation process has finished. The file
                 must not already exist.
-        '''
+        """
         self.runs = []
         self.trials = {}
         self.description = description
@@ -113,18 +114,18 @@ class PlottingRecorder(tm.Listener):
             print('the file "{}" already exists, using "{}" instead'.format(base_filename, autosave_filename))
         self.autosave_filename = autosave_filename
 
-
-    def save_compressed(self, filename, overwrite=False):
-        ''' save the recorder to a file which can be loaded later and used for plotting
+    def save_compressed(self, path, overwrite=False):
+        """ save the recorder to a file which can be loaded later and used for plotting
 
         Args:
+            path: the path where the recording will be saved to
             overwrite (bool): whether to overwrite the file if it already exists
 
         Note:
             this method is necessary as `utils.save_compressed()` will crash
             otherwise due to the circular reference between the recorder and the
             optimiser
-        '''
+        """
         opt = self.optimiser
         assert opt is not None
 
@@ -142,7 +143,7 @@ class PlottingRecorder(tm.Listener):
 
             while True:
                 try:
-                    tb.utils.save_compressed(self, filename, overwrite)
+                    tb.utils.save_compressed(self, path, overwrite)
                     break
                 except Exception as e:
                     print('in save_compressed:')
@@ -173,7 +174,6 @@ class PlottingRecorder(tm.Listener):
         s += 'description:\n{}\n'.format(self.description)
         return s
 
-
     def registered(self, optimiser):
         assert self.optimiser is None or self.optimiser == optimiser, \
             'cannot use the same PlottingRecorder with multiple optimisers'
@@ -197,11 +197,11 @@ class PlottingRecorder(tm.Listener):
         t.x = x
         t.selection_info = selection_info
 
-    def eval_started(self, trial_num):
+    def evaluation_started(self, trial_num):
         t = self.trials[trial_num]
         t.eval_time = time.time() # use as storage for the start time until evaluation has finished
 
-    def eval_finished(self, trial_num, y, eval_info):
+    def evaluation_finished(self, trial_num, y, eval_info):
         t = self.trials[trial_num]
         t.y = y
         t.eval_info = eval_info
@@ -216,32 +216,29 @@ class PlottingRecorder(tm.Listener):
         if self.autosave_filename is not None:
             self.save_compressed(self.autosave_filename, overwrite=True)
 
-
-
     # Utility functions
 
     def get_sorted_trials(self):
-        ''' return a list of (trial_num, Trial) sorted by trial_num (and so sorted by start time) '''
+        """ return a list of (trial_num, Trial) sorted by trial_num (and so sorted by start time) """
         return sorted(self.trials.items())
 
     def get_ranked_trials(self):
-        ''' return a list of (trial_num, Trial) sorted by cost (best first)  '''
+        """ return a list of (trial_num, Trial) sorted by cost (best first)  """
         maximising = self.optimiser.is_maximising()
         return sorted(self.trials.items(), key=lambda item: -item[1].y if maximising else item[1].y)
 
     def get_incumbent(self, up_to=None):
-        '''
+        """
         Args:
             up_to (int): the incumbent for the trials up to and including this trial number. Pass None to include all trials.
-        '''
+        """
         trials = self.get_sorted_trials()
         if up_to is not None:
             trials = trials[:up_to+1]
         assert trials, 'no trials'
         costs = [t.y for n, t in trials]
-        i = np.argmax(costs) if self.optimiser.is_maximising() else np.argmin(costs)
-        return trials[i] # (trial_num, trial)
-
+        i = int(np.argmax(costs)) if self.optimiser.is_maximising() else int(np.argmin(costs))
+        return trials[i]  # (trial_num, trial)
 
     def get_data_for_trial(self, trial_num):
         #TODO: for async cannot assume that finished == all trials before trial_num
@@ -250,7 +247,7 @@ class PlottingRecorder(tm.Listener):
         return finished, trial
 
     def get_acquisition_function(self, trial_num):
-        ''' see `Optimiser._get_acquisition_function()` '''
+        """ see `Optimiser._get_acquisition_function()` """
         opt = self.optimiser
         acq_type = opt.acq_func_factory.get_type()
         finished, t = self.get_data_for_trial(trial_num)
@@ -268,9 +265,9 @@ class PlottingRecorder(tm.Listener):
         return acq_fun
 
     def remove_unfinished(self):
-        ''' remove any unfinished trials. This is useful for still being able to
+        """ remove any unfinished trials. This is useful for still being able to
         plot after interrupting an Optimiser before it finished
-        '''
+        """
         for trial_num in self.unfinished_trial_nums:
             del self.trials[trial_num]
         self.unfinished_trial_nums = set()

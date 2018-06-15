@@ -105,10 +105,10 @@ class OverviewWindow(qt.QWidget, tm.Listener):
     def selection_started(self, trial_num):
         self.trial_state = 'selecting'
         self.state_changed.emit()
-    def eval_started(self, trial_num):
+    def evaluation_started(self, trial_num):
         self.trial_state = 'evaluating'
         self.state_changed.emit()
-    def eval_finished(self, trial_num, y, eval_info):
+    def evaluation_finished(self, trial_num, y, eval_info):
         self.trial_state = 'finished'
         self.finished_trials += 1
         self.incumbent = self.optimiser.get_incumbent(as_dict=True)

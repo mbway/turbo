@@ -130,6 +130,7 @@ def plot_surrogate_hyper_params_2D(rec, param_indices=(0, 1), trial_nums=None,
 
     if isinstance(m0, tm.SciKitGPSurrogate.ModelInstance):
         if use_param_bounds:
+            #TODO: k is not defined
             # k.bounds is log transformed
             ax.set_xlim(np.exp(k.bounds[x_param, 0]), np.exp(k.bounds[x_param, 1]))
             ax.set_ylim(np.exp(k.bounds[y_param, 0]), np.exp(k.bounds[y_param, 1]))
@@ -140,7 +141,7 @@ def plot_surrogate_hyper_params_2D(rec, param_indices=(0, 1), trial_nums=None,
         raise NotImplementedError()
 
     sizes = tb.utils.remap(likelihoods, (min(likelihoods), max(likelihoods)), size_limits)
-    s = ax.scatter(hyper_params[:,x_param], hyper_params[:,y_param], c=trial_nums, cmap='viridis', s=sizes, alpha=0.8, linewidth=0.5, edgecolors='k')
+    s = ax.scatter(hyper_params[:,x_param], hyper_params[:, y_param], c=trial_nums, cmap='viridis', s=sizes, alpha=0.8, linewidth=0.5, edgecolors='k')
     ticks = None if len(trial_nums) > 50 else trial_nums
     c = fig.colorbar(s, ticks=ticks, ax=ax)
     c.set_label('trial number')

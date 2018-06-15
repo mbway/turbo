@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-''' The Bayesian Optimisation specific code
-'''
+""" The Bayesian Optimisation specific code """
 
 import numpy as np
 
@@ -11,7 +10,7 @@ from .optimiser_presets import load_optimiser_preset
 
 class Optimiser:
     def __init__(self, objective, desired_extremum, bounds, pre_phase_trials, settings_preset='default'):
-        '''
+        """
         Args:
             objective: a function to be optimised, which accepts parameters
                 corresponding to the given bounds and returns an objective/cost
@@ -24,10 +23,10 @@ class Optimiser:
                 objective function is to be maximised or minimised
             bounds: a list of tuples of (name, min, max) for each parameter of
                 the objective function
-            preset: the name of the preset optimiser settings to load with
+            settings_preset: the name of the preset optimiser settings to load with
                 `load_optimiser_preset()`. Pass None to leave the optimiser
                 uninitialised for full customisation.
-        '''
+        """
         self.objective = objective
         #TODO: internally, should use is_maximising or is_minimising where possible
         assert desired_extremum in ('min', 'max'), 'desired_extremum must be either "min" or "max"'
@@ -58,14 +57,14 @@ class Optimiser:
             load_optimiser_preset(self, settings_preset)
 
     class Runtime:
-        ''' holds the data for an optimisation run
+        """ holds the data for an optimisation run
 
         Attributes:
             max_trials: the maximum number of trials in total (not just this
                 run) before stopping
             trial_xs: input points (in latent space) for the finished trials
             trial_ys: cost values for the finished trials
-        '''
+        """
         def __init__(self):
             self.running = False
             self.started_trials = 0
@@ -76,11 +75,11 @@ class Optimiser:
             self.trial_ys = [] # list of scalars
 
         def check_consistency(self):
-            '''check that the optimiser runtime data makes sense
+            """ check that the optimiser runtime data makes sense
 
             Raises:
                 AssertionError
-            '''
+            """
             assert self.started_trials >= self.finished_trials
             assert len(self.trial_xs) == len(self.trial_ys)
             assert len(self.trial_ys) == self.finished_trials
@@ -91,13 +90,13 @@ class Optimiser:
             self.finished_trials += 1
 
     def __setattr__(self, name, value):
-        '''limit the ability to set optimiser attributes. New attributes can
+        """ limit the ability to set optimiser attributes. New attributes can
         only be created from the constructor.
 
         This can help prevent typos caused by getting the name of a module wrong
         (or catching when a name changes due to an API update), which would
         otherwise fail silently, especially if default settings are loaded.
-        '''
+        """
         initialised = hasattr(self, 'initialised') and self.initialised
         if hasattr(self, name) or not initialised:
             object.__setattr__(self, name, value)
@@ -106,6 +105,7 @@ class Optimiser:
 
     def is_maximising(self):
         return self.desired_extremum == 'max'
+
     def is_minimising(self):
         return self.desired_extremum == 'min'
 
@@ -113,16 +113,17 @@ class Optimiser:
         assert listener not in self._listeners
         self._listeners.append(listener)
         listener.registered(self)
+
     def unregister_listener(self, listener):
         assert listener in self._listeners
         self._listeners = [l for l in self._listeners if l != listener]
         listener.unregistered()
 
     def load_trials(self, trials):
-        '''
+        """
         Args:
             trials (PlottingRecorder.Trial): a list of trials to load
-        '''
+        """
         assert all(trial.x.shape == (1, len(self.bounds)) for trial in trials)
         assert not self.rt.running
 
@@ -138,15 +139,15 @@ class Optimiser:
             rt.started_trials += 1
             self._notify('selection_started', trial_num)
             self._notify('selection_finished', trial_num, trial.x, trial.selection_info)
-            self._notify('eval_started', trial_num)
+            self._notify('evaluation_started', trial_num)
             rt.add_finished_trial(trial.x, trial.y)
-            self._notify('eval_finished', trial_num, trial.y, trial.eval_info)
+            self._notify('evaluation_finished', trial_num, trial.y, trial.eval_info)
             trial_num += 1
         rt.running = False
         self._notify('run_finished')
 
     def get_incumbent(self, as_dict=False):
-        '''get the current best trial
+        """ get the current best trial
 
         Args:
             as_dict (bool): True => return the trial input as a dict in the input space
@@ -157,13 +158,13 @@ class Optimiser:
             i = trial number
             x = the trial input
             y = the trial objective function value
-        '''
+        """
         rt = self.rt
-        i = np.argmax(rt.trial_ys) if self.is_maximising() else np.argmin(rt.trial_ys)
+        i = int(np.argmax(rt.trial_ys)) if self.is_maximising() else int(np.argmin(rt.trial_ys))
         x = rt.trial_xs[i]
         if as_dict:
             x = self._point_to_dict(self.latent_space.from_latent(x))
-        return (i, x, rt.trial_ys[i])
+        return i, x, rt.trial_ys[i]
 
     def run(self, max_trials):
         if self.async_eval is None:
@@ -172,13 +173,13 @@ class Optimiser:
             raise NotImplementedError()
 
     def run_sequential(self, max_trials):
-        ''' Run the Bayesian optimisation for the given number of trials
-        '''
+        """ Run the Bayesian optimisation for the given number of trials
+        """
         self.latent_space.set_input_bounds(self.bounds)
         self._check_settings()
-        rt = self.rt # runtime data
+        rt = self.rt  # runtime data
         rt.running = True
-        rt.max_trials = max_trials # TODO: naming (overall vs this run)
+        rt.max_trials = max_trials  # TODO: naming (overall vs this run)
         self._notify('run_started', rt.finished_trials, max_trials)
 
         while rt.finished_trials < max_trials:
@@ -186,7 +187,7 @@ class Optimiser:
 
             x = self._select_trial(trial_num)
             params_dict = self._point_to_dict(self.latent_space.from_latent(x))
-            self._notify('eval_started', trial_num)
+            self._notify('evaluation_started', trial_num)
 
             rt.started_trials += 1
             res = self.objective(**params_dict)
@@ -199,29 +200,27 @@ class Optimiser:
             #TODO: assert that y is the correct type and not None, NaN or infinity
 
             rt.add_finished_trial(x, y)
-            self._notify('eval_finished', trial_num, y, eval_info)
+            self._notify('evaluation_finished', trial_num, y, eval_info)
             rt.check_consistency()
 
         rt.running = False
         self._notify('run_finished')
 
-
-
     def _check_settings(self):
-        ''' check that the current optimiser settings make sense
+        """ check that the current optimiser settings make sense
 
         Raises:
             AssertionError
-        '''
+        """
         pass#TODO
 
     def _point_to_dict(self, point):
-        ''' convert the given point (array of values) to a dictionary of parameter names to values
+        """ convert the given point (array of values) to a dictionary of parameter names to values
 
         Note:
             the point should reside in the input space, not the latent space if
             the dictionary is to be fed to the objective function.
-        '''
+        """
         num_params = len(self.bounds)
         assert point.shape == (num_params,) or point.shape == (1, num_params), \
             'invalid point shape: {}'.format(point.shape)
@@ -229,7 +228,7 @@ class Optimiser:
         return {self.bounds.ordered[i][0] : point[i] for i in range(num_params)}
 
     def _notify(self, event, *args):
-        '''Notify each listener of the given event
+        """ Notify each listener of the given event
 
         Args:
             event (str): the name of the method to call on each listener in `self.listeners`
@@ -237,12 +236,12 @@ class Optimiser:
 
         Note:
             see `turbo.modules.Listener` for the possible methods and arguments
-        '''
+        """
         for l in self._listeners:
             getattr(l, event)(*args)
 
     def _get_acquisition_function(self, trial_num, model):
-        ''' instantiate an acquisition function for the given iteration '''
+        """ instantiate an acquisition function for the given iteration """
         acq_type = self.acq_func_factory.get_type()
         acq_args = [trial_num, model, self.desired_extremum]
         if acq_type == 'optimism':
@@ -264,7 +263,7 @@ class Optimiser:
                 return 'bayes'
 
     def _select_trial(self, trial_num):
-        ''' Get the next input to evaluate '''
+        """ Get the next input to evaluate """
         rt = self.rt
         lb = self.latent_space.get_latent_bounds()
 

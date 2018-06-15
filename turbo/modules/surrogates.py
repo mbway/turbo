@@ -18,8 +18,9 @@ import turbo as tb
 
 #TODO: MCMC?
 
+
 class Surrogate:
-    ''' A probabilistic model (predicts uncertainty as well as the mean) for approximating the objective function
+    """ A probabilistic model (predicts uncertainty as well as the mean) for approximating the objective function
 
     The surrogate persists throughout the Bayesian optimisation run and may
     store some state (such as the last model parameters). It is a factory which
@@ -27,24 +28,23 @@ class Surrogate:
 
     This class provides a wrapper around specific models or libraries suitable
     for being used as a surrogate model for Bayesian optimisation.
-    '''
+    """
 
     def construct_model(self, trial_num, X, y):
-        '''create a model instance trained on the data set for the given trial
+        """create a model instance trained on the data set for the given trial
 
         Returns: (model, fitting_info)
-        '''
+        """
         raise NotImplementedError()
 
-
     class ModelInstance:
-        '''An instance of the surrogate model which is trained on the data set
+        """An instance of the surrogate model which is trained on the data set
         for a particular trial.
 
         This class provides a consistent interface independent of the underlying library.
-        '''
+        """
         def predict(self, X, return_std_dev=False):
-            '''
+            """
             Args:
                 X: a point or matrix of points (as rows)
 
@@ -53,11 +53,11 @@ class Surrogate:
                 deviation if `return_std_dev=True`.
                 `mus.shape == (X_height,)`
                 `sigmas.shape == (X_height,)`
-            '''
+            """
             raise NotImplementedError()
 
         def get_hyper_params(self):
-            '''
+            """
             Returns:
                 the hyperparameters of the model in a format suitable for
                 storage and using for starting points for future models.
@@ -66,22 +66,20 @@ class Surrogate:
                 When training with the same hyperparameters and dataset, the
                 resulting model should be identical. Alternatively, training with
                 the same hyperparameters with a different dataset is also possible.
-            '''
+            """
             raise NotImplementedError()
 
         def get_hyper_param_names(self):
-            ''' get the names of the parameters corresponding to get_hyper_params '''
+            """ get the names of the parameters corresponding to get_hyper_params """
             raise NotImplementedError()
 
         def get_log_likelihood(self):
-            ''' get the data log likelihood of the model '''
+            """ get the data log likelihood of the model """
             raise NotImplementedError()
 
 
-
-
 class GPySurrogate(Surrogate):
-    '''A surrogate model which uses GPy for Gaussian process regression
+    """A surrogate model which uses GPy for Gaussian process regression
 
     Note: see https://gpy.readthedocs.io/en/deploy/
 
@@ -92,14 +90,14 @@ class GPySurrogate(Surrogate):
         over using a white kernel (https://github.com/SheffieldML/GPy/issues/506)
     - GPy kernels do not require multiplication by a constant kernel, since this
         constant is included in the kernel already.
-    '''
+    """
 
-    default_model_params = {'normalizer' : True}
-    default_optimise_params = {'parallel' : True, 'verbose' : False}
+    default_model_params = {'normalizer': True}
+    default_optimise_params = {'parallel': True, 'verbose': False}
 
     def __init__(self, model_params=None, optimise_params=None,
                  training_iterations=10, param_continuity=True, sparse=False):
-        '''
+        """
         Args:
             model_params (dict): arguments to pass to the model constructor
                 (GPRegression or SparseGPRegression) (see GPy documentation)
@@ -130,7 +128,7 @@ class GPySurrogate(Surrogate):
                 next model (otherwise chosen randomly).
             sparse (bool): whether to use SparseGPRegression instead of
                 GPRegression as the model (see GPy documentation)
-        '''
+        """
         assert GPy is not None, 'failed to import GPy.'
         self.model_params = model_params or self.default_model_params
         self.optimise_params = optimise_params or self.default_optimise_params
@@ -140,7 +138,8 @@ class GPySurrogate(Surrogate):
         self.param_continuity = param_continuity
         self.sparse = sparse
         if self.sparse:
-            assert 'kernel' in self.model_params, 'sparse GP does not specify a kernel by default, so must be specified manually!'
+            assert 'kernel' in self.model_params, \
+                'sparse GP does not specify a kernel by default, so must be specified manually!'
 
         self._last_model_params = None
 
@@ -157,7 +156,7 @@ class GPySurrogate(Surrogate):
 
     def construct_model(self, trial_num, X, y):
         iterations = self._get_training_iterations(trial_num)
-        fitting_info = {'iterations' : iterations}
+        fitting_info = {'iterations': iterations}
 
         # the kernel parameters are altered by the model, so give a copy each
         # time. Also kernels cause pickling issues once they have been passed to
@@ -170,16 +169,16 @@ class GPySurrogate(Surrogate):
         # will always raise RuntimeWarning("Don't forget to initialize by self.initialize_parameter()!")
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore', '.*initialize_parameter.*')
-            model = model_class(X, tb.utils.col2D(y), initialize=False, **model_params)
+            model = model_class(X, tb.utils.col_2d(y), initialize=False, **model_params)
 
-        model.update_model(False) # prevents the GP from fitting to the data until we are ready to enable it manually
-        model.initialize_parameter() # initialises the hyperparameter objects
+        model.update_model(False)  # prevents the GP from fitting to the data until we are ready to enable it manually
+        model.initialize_parameter()  # initialises the hyperparameter objects
         if self.param_continuity and self._last_model_params is not None:
             model[:] = self._last_model_params
         model.update_model(True)
 
         if iterations == 0: # fixed
-            fitting_info.update({'fixed' : model[:]})
+            fitting_info.update({'fixed': model[:]})
         else:
             # the current parameters are used as one of the starting locations (as of the time of writing)
             # https://github.com/sods/paramz/blob/master/paramz/model.py
@@ -196,7 +195,6 @@ class GPySurrogate(Surrogate):
             self._last_model_params = model[:]
 
         return GPySurrogate.ModelInstance(model), fitting_info
-
 
     class ModelInstance(Surrogate.ModelInstance):
         def __init__(self, model):
@@ -220,13 +218,11 @@ class GPySurrogate(Surrogate):
             return self.model.log_likelihood()
 
 
-
-
 class SciKitGPSurrogate(Surrogate):
-    '''A surrogate model which uses a `GaussianProcessRegressor` from scikit learn
+    """A surrogate model which uses a `GaussianProcessRegressor` from scikit learn
 
     Note: see http://scikit-learn.org/stable/modules/generated/sklearn.gaussian_process.GaussianProcessRegressor.html
-    '''
+    """
 
     if sk_gp is not None:
         default_model_params = {
@@ -242,9 +238,8 @@ class SciKitGPSurrogate(Surrogate):
             'normalize_y' : True
         }
 
-
     def __init__(self, model_params=None, training_iterations=None, param_continuity=True):
-        '''
+        """
         Args:
             model_params (dict): parameters to pass to the `GaussianProcessRegressor` constructor
                 see: http://scikit-learn.org/stable/modules/generated/sklearn.gaussian_process.GaussianProcessRegressor.html
@@ -271,7 +266,7 @@ class SciKitGPSurrogate(Surrogate):
             param_continuity (bool): whether to use the trained hyper parameters
                 from the previous model as a starting point when training the
                 next model (otherwise chosen randomly).
-        '''
+        """
         assert sk_gp is not None, 'failed to import sklearn.'
         self.model_params = model_params or self.default_model_params
         self.training_iterations = training_iterations
@@ -294,7 +289,7 @@ class SciKitGPSurrogate(Surrogate):
 
     def construct_model(self, trial_num, X, y):
         iterations = self._get_training_iterations(trial_num)
-        fitting_info = {'iterations' : iterations}
+        fitting_info = {'iterations': iterations}
 
         assert 'kernel' in self.model_params, 'you must specify a kernel for the GP'
         # don't want the initial parameter values to be changed, so make a copy
@@ -304,10 +299,11 @@ class SciKitGPSurrogate(Surrogate):
             # theta is log-transformed
             model_params['kernel'].theta = np.log(self._last_model_params.copy())
 
-        if iterations == 0: # fixed
+        if iterations == 0:  # fixed
+            #TODO: this must be wrong since `model` is undefined
             model_params['optimizer'] = None
             model_params['n_restarts_optimizer'] = 0
-            fitting_info.update({'fixed' : model.kernel.theta})
+            fitting_info.update({'fixed': model.kernel.theta})
         else:
             # for scikit: 0 restarts => 1 iteration
             model_params['n_restarts_optimizer'] = iterations - 1
@@ -324,7 +320,6 @@ class SciKitGPSurrogate(Surrogate):
             self._last_model_params = np.exp(model.kernel_.theta.copy())
 
         return SciKitGPSurrogate.ModelInstance(model), fitting_info
-
 
     class ModelInstance(Surrogate.ModelInstance):
         def __init__(self, model):
