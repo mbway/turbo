@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-''' GUI utilities for various platforms '''
+""" GUI utilities for various platforms """
 
 from . import jupyter
 from . import cli

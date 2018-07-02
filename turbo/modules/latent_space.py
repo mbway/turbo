@@ -22,6 +22,8 @@ from turbo.optimiser import Bounds
 from turbo.utils import remap
 
 
+#TODO: to implement non-constant mappings, have an `update` method called after a trial is finished, passing in the whole data set again
+
 class LatentSpace:
     """
     Attributes:
@@ -30,7 +32,7 @@ class LatentSpace:
     """
     def __init__(self):
         self.input_bounds = None
-    def set_input_bounds(self, input_bounds):
+    def _set_input_bounds(self, input_bounds):
         """ called by the optimiser to initialise the latent space """
         raise NotImplementedError()
     def get_latent_bounds(self):
@@ -110,7 +112,7 @@ class ConstantMap:
 
 class NoLatentSpace(LatentSpace):
     """ perform no modification to the input space so that input space == latent space """
-    def set_input_bounds(self, input_bounds):
+    def _set_input_bounds(self, input_bounds):
         self.input_bounds = input_bounds
     def linear_latent_range(self, param, divisions):
         pmin, pmax = self.input_bounds.get(param)
@@ -153,17 +155,14 @@ class LogMap(ConstantMap):
                 infinity. This parameter is useful for moving the asymptote
                 outside of the input space range to avoid crashing.
         """
-        self.input_range = None
-        self.latent_range = None
         self.zero_point = zero_point
 
     def input_to_latent(self, param):
-        assert self.input_range[0] <= param <= self.input_range[1]
-        return math.log(param-self.zero_point)
+        assert self.zero_point < param, 'point {} outside valid range ]{}, infinity]'.format(param, self.zero_point)
+        return math.log(param - self.zero_point)
 
     def latent_to_input(self, param):
-        assert self.latent_range[0] <= param <= self.latent_range[1]
-        return math.exp(param)+self.zero_point
+        return math.exp(param) + self.zero_point
 
 
 class LinearMap(ConstantMap):
@@ -184,11 +183,11 @@ class LinearMap(ConstantMap):
         self.latent_range = latent_space_range
 
     def input_to_latent(self, param):
-        assert self.input_range[0] <= param <= self.input_range[1]
+        assert self.input_range[0] <= param <= self.input_range[1], 'point outside valid range'
         return remap(param, self.input_range, self.latent_range)
 
     def latent_to_input(self, param):
-        assert self.latent_range[0] <= param <= self.latent_range[1]
+        assert self.latent_range[0] <= param <= self.latent_range[1], 'point outside valid range'
         return remap(param, self.latent_range, self.input_range)
 
 #TODO: make helper functions which generate constant latent spaces mapping to hypercubes centered at the origin or over the range [0,1]
@@ -214,11 +213,11 @@ class ConstantLatentSpace(LatentSpace):
         self.input_bounds = None
         self.latent_bounds = None
 
-    def set_input_bounds(self, input_bounds):
+    def _set_input_bounds(self, input_bounds):
         assert set(self.mappings.keys()) == set(input_bounds.params), \
-            'parameters with mappings differs from those of the bounds'
+            'parameters with mappings differs from those of the bounds.'
         assert all(isinstance(m, ConstantMap) for m in self.mappings.values()), \
-            'mappings must be constant'
+            'mappings of ConstantLatentSpace must be constant.'
         self.input_bounds = input_bounds
 
         latent_bounds = []

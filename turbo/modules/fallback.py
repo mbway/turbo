@@ -22,7 +22,7 @@ class Fallback:
             functions.
         close_tolerance: the maximum Euclidean distance considered 'too close',
             causing a Bayesian optimisation trial to be discarded and the
-            fallback method used instead (not planned) (0.0 to disable)
+            fallback method used instead (not planned) (<0 to disable)
         selector: the selector to use during fallback. If None then the `pre_phase_selector` is used
     """
     def __init__(self, planned_fallback=None, close_tolerance=1e-10, selector=None):
@@ -48,7 +48,7 @@ class Fallback:
 
     def point_too_close(self, x, X):
         """ whether the trial point x is too close to any of the points in X """
-        if self.close_tolerance == 0.0:
+        if self.close_tolerance < 0:
             return False
         else:
             return close_to_any(x, X, tol=self.close_tolerance)

@@ -7,7 +7,6 @@ tags
 .ipynb_checkpoints/
 *.pyc
 build/
-tests/turbo
 
 # generated documentation
 docs/build/
@@ -17,7 +16,11 @@ docs/source/_autosummary/
 logs/
 frames/
 *.json
+*.csv
 
-# coverage
+# tests
 .coverage
-htmlcov
+tests/htmlcov
+tests/prof
+tests/turbo
+.pytest_cache

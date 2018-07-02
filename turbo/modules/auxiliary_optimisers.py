@@ -13,7 +13,7 @@ from .naive_selectors import random_selector
 from turbo.utils import row_2d
 
 
-class random_quasi_newton:
+class RandomAndQuasiNewton:
     def __init__(self, num_random=1000, grad_restarts=10, start_from_best=2):
         """
         Args:

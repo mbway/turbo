@@ -7,12 +7,12 @@ import copy
 try:
     import sklearn.gaussian_process as sk_gp
 except ImportError:
-    sk_gp = None # not required if not used
+    sk_gp = None  # not required if not used
 
 try:
     import GPy
 except ImportError:
-    GPy = None # not required if not used
+    GPy = None  # not required if not used
 
 import turbo as tb
 
@@ -20,7 +20,8 @@ import turbo as tb
 
 
 class Surrogate:
-    """ A probabilistic model (predicts uncertainty as well as the mean) for approximating the objective function
+    """ A probabilistic model (predicts uncertainty as well as the mean) for
+    approximating the objective function
 
     The surrogate persists throughout the Bayesian optimisation run and may
     store some state (such as the last model parameters). It is a factory which
@@ -47,6 +48,8 @@ class Surrogate:
             """
             Args:
                 X: a point or matrix of points (as rows)
+                return_std_dev (bool): whether to return the standard deviation in
+                    addition to the model prediction
 
             Returns:
                 The mean `y` prediction for the given `X`'s, and also the standard
@@ -171,13 +174,14 @@ class GPySurrogate(Surrogate):
             warnings.filterwarnings('ignore', '.*initialize_parameter.*')
             model = model_class(X, tb.utils.col_2d(y), initialize=False, **model_params)
 
+        # these steps for initialising a model from stored parameters are from https://github.com/SheffieldML/GPy
         model.update_model(False)  # prevents the GP from fitting to the data until we are ready to enable it manually
         model.initialize_parameter()  # initialises the hyperparameter objects
         if self.param_continuity and self._last_model_params is not None:
             model[:] = self._last_model_params
         model.update_model(True)
 
-        if iterations == 0: # fixed
+        if iterations == 0:  # fixed
             fitting_info.update({'fixed': model[:]})
         else:
             # the current parameters are used as one of the starting locations (as of the time of writing)
@@ -192,7 +196,7 @@ class GPySurrogate(Surrogate):
             if len(ws) > 0:
                 fitting_info.update({'warnings': [w.message for w in ws]})
 
-            self._last_model_params = model[:]
+            self._last_model_params = model.param_array[:]
 
         return GPySurrogate.ModelInstance(model), fitting_info
 
@@ -209,7 +213,7 @@ class GPySurrogate(Surrogate):
                 return mean.flatten()
 
         def get_hyper_params(self):
-            return self.model[:]
+            return self.model.param_array[:]
 
         def get_hyper_param_names(self):
             return self.model.parameter_names()

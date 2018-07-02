@@ -1,22 +1,36 @@
-# README #
+# turbo #
+turbo is a modular Bayesian optimisation framework which focuses on gathering and storing the intermediate optimisation steps to give insight into the decision making process.
+turbo is capable of producing a wide variety of plots and supports many variations of the basic Bayesian optimisation algorithm.
 
-# Comparison of optimisation.py with other Bayesian Optimisation libraries #
+# Algorithm Features #
+- Acquisition Functions
+    - Probability of Improvement (PI)
+    - Expected Improvement (EI)
+    - Upper/Lower Confidence Bound (UCB/LCB)
+- Pre-Phase 'naive' selectors
+    - Random
+    - Latin Hypercube Sampling (LHS)
+    - Manual
+- Surrogate Models
+    - Scikit-Learn Gaussian Process
+    - GPy Gaussian Process
+- Latent Space
+    - Fixed warping (e.g. log-transformed or linear map to `[0,1]` etc)
+- Fallback
+    - Scheduled random samples ("Harmless" Bayesian Optimisation)
+    - de-duplication
+- Misc
+    - able to use the same storage and plotting functionality with random search or any of the available 'naive' samplers
 
-## Features (some unique)
-- parallel optimisation (multiple evaluations at once) with hypothesised samples
-    - 'Kriging Believer' Ginsbourger et al
-    - possibly not the best solution to parallelising. Also note: the paper
-    only mentions using EI acquisition function.
-- client/server architecture allowing for massively parallel optimisation
-- checkpoints and plotting each step of optimisation
-    - the GP is saved exactly so another GP does not have to be trained for plotting (which may fit differently to the GP used during the algorithm)
-- ability to save extra data along with the cost of a particular configuration for later analysis (eg can keep the predictions made by the trained model for plotting later)
-- configurable 'closeness' parameter for choosing randomly (other libraries choose randomly only on almost exact duplicates)
-- able to treat some parameters as being scaled logarithmically (where the order of magnitude matters more than the value). Support for plotting logarithmic parameters and support from the optimisers (Bayesian optimisation trains the GP on the exponents of the logarithmic values and log-linear sampling for randomly chosen samples)
+# Dependencies #
+all dependencies can be installed with pip, see `requirements.txt`
 
 
-## Comparison
-TODO
+# Links
+- Black Box Optimisation Benchmarking Procedure: <http://coco.lri.fr/COCOdoc/bbo_experiment.html>
+- python implementations of many benchmarking functions <https://github.com/andyfaff/ampgo/blob/master/%20ampgo%20--username%20andrea.gavana%40gmail.com/go_benchmark.py>
+
+## Some other Bayesian optimisation libraries
 - https://github.com/fmfn/BayesianOptimization
 - https://github.com/thuijskens/bayesian-optimization
 - https://github.com/befelix/SafeOpt
@@ -25,65 +39,3 @@ TODO
 - https://github.com/automl/RoBO
 - https://github.com/resibots/limbo
 
-# Black Box Optimisation Benchmarking Procedure
-<http://coco.lri.fr/COCOdoc/bbo_experiment.html>
-
-# Contents (in chronological order) #
-First I experimented with tensorflow and Jupyter, then a simple MC-dropout implementation
-- Linear Regression.ipynb
-    - following a tensorflow tutorial to create a simple model (linear regression)
-- MLP.ipynb
-    - experiment with a simple MLP
-- Animation.ipynb
-    - experiment with animations in Jupyter
-- MLP-Dropout-Uncertainty.ipynb
-    - an ad-hoc (no external modules) implementation of MC-dropout with a simple MLP with 1D data (complete with equations and explanations)
-
-I then tried to generate synthetic 2D data (Gaussian mixture pdf) which was much harder than expected. I then implemented MC-dropout with the 2D data
-- Gaussian-Implementation.ipynb
-    - experiment with my own multivariate Gaussian PDF
-- MLP-Dropout-Uncertainty-2D.ipynb
-    - MC-dropout being used to estimate uncertainty in 2D (ad-hoc, no external modules)
-- MLP-Dropout-Uncertainty-2D-ReLu-params.ipynb
-    - a copy of `MLP-Dropout-Uncertainty-2D.ipynb` with relu activation and some fairly decent parameters for it
-
-Preparing for automatic hyperparameter optimisation, I extracted the important code into python modules:
-- MLP.py
-    - A simple multi-layer perceptron implementation
-- synthetic_data.py
-    - functions for creating the synthetic data first created in `MLP-Dropout-Uncertainty.ipynb` and `MLP-Dropout-Uncertainty-2D.ipynb`
-- MLP-module.ipynb
-    - a re-creation of `MLP-Dropout-Uncertainty.ipynb` but using the two modules above
-
-I then started an optimisation framework and interactive 3D plotting tools
-- plot3D.py
-    - a small wrapper around some plotly functions to easily create 3D scatter and surface plots
-- 3D-Plotting.ipynb
-    - a demonstration of using plot3D.py and a comparison with a (non-interactive) matplotlib 3D plot
-- optimisation.py
-    - a self-contained optimisation framework capable of Grid search, random search and Bayesian optimisation. Other features: tested, Very general and flexible, multithreaded, built in plotting tools, good logging and error handling, can save (to json) and resume optimisation
-- optimisation_tests.py
-    - unit tests and system tests for the optimisation framework
-- Optimisation.ipynb
-    - A showcase of the features of optimisation.py with some toy problems in 1D and 2D
-- MLP-Optimisation.ipynb
-    - application of the optimisation framework to optimise the MLP hyperparameters to give the best uncertainty predictions
-
-
-# Notes #
-- a neural network with infinite neurons is equivalent to a Gaussian process
-- can use dropout to approximate the uncertainty of the network prediction
-
-
-## Sources ##
-- https://github.com/aymericdamien/TensorFlow-Examples
-- 'estimating uncertainty using dropout'
-- http://mlg.eng.cam.ac.uk/yarin/blog_3d801aa532c1ce.html
-- https://github.com/yaringal/DropoutUncertaintyCaffeModels
-- Gaussian process
-    - http://www.gaussianprocess.org/gpml/chapters/
-
-
-# Dependencies #
-- install dependencies with pip:
-- `pip3 install jupyter numpy matplotlib sklearn scipy plotly`

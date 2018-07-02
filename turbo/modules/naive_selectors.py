@@ -60,7 +60,7 @@ class LHS_selector:
     def __init__(self, num_total):
         self.num_total = num_total
         self.sequence = None
-        self.index = 0 # index into the sequence
+        self.index = 0  # index into the sequence
 
     def __call__(self, num_points, latent_bounds):
         if self.sequence is None:
@@ -68,11 +68,11 @@ class LHS_selector:
             # fills points uniformly in each interval
             lower_bounds = np.array([b[1] for b in latent_bounds.ordered])
             ranges = np.array([b[2]-b[1] for b in latent_bounds.ordered])
-            n = self.num_total # length of the sequence
+            n = self.num_total  # length of the sequence
             dims = len(latent_bounds)
             # rand is uniform random over [0,1)
             # each row of sequence is a sample
-            self.sequence = lower_bounds + ranges * (np.arange(n).reshape(-1,1) + np.random.rand(n, dims)) / n
+            self.sequence = lower_bounds + ranges * (np.arange(n).reshape(-1, 1) + np.random.rand(n, dims)) / n
             # shuffle each dimension
             for i in range(dims):
                 self.sequence[:, i] = np.random.permutation(self.sequence[:, i])

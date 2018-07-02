@@ -2,6 +2,7 @@
 """ The Bayesian Optimisation specific code """
 
 import numpy as np
+import json
 
 # local imports
 from .bounds import Bounds
@@ -39,11 +40,11 @@ class Optimiser:
         self.latent_space = None
         self.pre_phase_select = None
         self.fallback = None
-        self.maximise_acq = None
-        self.async_eval = None#TODO
-        self.parallel_strategy = None#TODO
-        self.surrogate = None
-        self.acq_func_factory = None
+        self.aux_optimiser = None  # auxiliary optimiser to maximise the acquisition function
+        #self.async_eval = None#TODO
+        #self.parallel_strategy = None#TODO make sub-module of async-eval
+        self.surrogate = None  # factory for creating surrogate models
+        self.acquisition = None  # factory for creating acquisition functions
 
         # runtime data kept separate from configuration data
         self.rt = Optimiser.Runtime()
@@ -51,7 +52,7 @@ class Optimiser:
         # and `unregister_listener()` methods
         self._listeners = []
 
-        self.initialised = True # no more attributes can be set
+        self.initialised = True  # no more attributes can be set
 
         if settings_preset is not None:
             load_optimiser_preset(self, settings_preset)
@@ -69,10 +70,15 @@ class Optimiser:
             self.running = False
             self.started_trials = 0
             self.finished_trials = 0
+
+            # stopping conditions
             self.max_trials = 0
+            #TODO: max_time (maximum wallclock time before stopping)
+            #TODO: min_improvement (over last N trials if incumbent hasn't improved by at least min_improvement then stop)
+
             #TODO (naming): these should be finished_xs and finished_ys
-            self.trial_xs = [] # list of row vectors
-            self.trial_ys = [] # list of scalars
+            self.trial_xs = []  # list of row vectors
+            self.trial_ys = []  # list of scalars
 
         def check_consistency(self):
             """ check that the optimiser runtime data makes sense
@@ -119,15 +125,60 @@ class Optimiser:
         self._listeners = [l for l in self._listeners if l != listener]
         listener.unregistered()
 
+    def save_JSON(self, filename, include_runtime=True):
+        data = self.save(include_runtime)
+        with open(filename, 'w') as f:
+            json.dump(data, f, indent='    ', sort_keys=True)
+
+    def load_JSON(self, filename):
+        with open(filename, 'r') as f:
+            data = json.load(f)
+            self.load(data)
+
+    def save(self, include_runtime=True):
+        """ Save the configuration of the optimiser to a dictionary
+
+        Args:
+            include_runtime: Whether to also include the current runtime state of the optimiser
+
+        Note:
+            the objective function and attached listeners are not saved
+        """
+        assert self.initialised
+        data = {
+            'desired_extremum': self.desired_extremum,
+            'bounds': self.bounds.ordered,
+            'pre_phase_trials': self.pre_phase_trials,
+            'latent_space': self.latent_space.save(include_runtime),
+            'pre_phase_select': self.pre_phase_select.save(include_runtime),
+            'fallback': self.fallback.save(include_runtime),
+            'aux_optimiser': self.aux_optimiser.save(include_runtime),
+            'surrogate': self.surrogate.save(include_runtime),
+            'acquisition': self.acquisition.save(include_runtime)
+        }
+        if include_runtime and self.rt is not None:
+            data['runtime'] = {
+                'running': self.rt.running,
+                'started_trials': self.rt.started_trials,
+                'finished_trials': self.rt.finished_trials,
+                'max_trials': self.rt.max_trials,
+                'trial_xs': self.rt.trial_xs[:],  # TODO: may need to make a copy of each elements
+                'trial_ys': self.rt.trial_ys[:]
+            }
+        return data
+
+    def load(self, data):
+        pass  #TODO:
+
     def load_trials(self, trials):
         """
         Args:
-            trials (PlottingRecorder.Trial): a list of trials to load
+            trials (Recorder.Trial): a list of trials to load
         """
         assert all(trial.x.shape == (1, len(self.bounds)) for trial in trials)
         assert not self.rt.running
 
-        self.latent_space.set_input_bounds(self.bounds)
+        self.latent_space._set_input_bounds(self.bounds)
         self._check_settings()
         rt = self.rt # runtime data
         rt.running = True
@@ -167,17 +218,19 @@ class Optimiser:
         return i, x, rt.trial_ys[i]
 
     def run(self, max_trials):
-        if self.async_eval is None:
-            self.run_sequential(max_trials)
-        else:
-            raise NotImplementedError()
+        self.run_sequential(max_trials)
+        #if self.async_eval is None:
+        #    self.run_sequential(max_trials)
+        #else:
+        #    raise NotImplementedError()
 
     def run_sequential(self, max_trials):
         """ Run the Bayesian optimisation for the given number of trials
         """
-        self.latent_space.set_input_bounds(self.bounds)
+        self.latent_space._set_input_bounds(self.bounds)
         self._check_settings()
         rt = self.rt  # runtime data
+        assert not rt.running
         rt.running = True
         rt.max_trials = max_trials  # TODO: naming (overall vs this run)
         self._notify('run_started', rt.finished_trials, max_trials)
@@ -242,16 +295,16 @@ class Optimiser:
 
     def _get_acquisition_function(self, trial_num, model):
         """ instantiate an acquisition function for the given iteration """
-        acq_type = self.acq_func_factory.get_type()
+        acq_type = self.acquisition.get_type()
         acq_args = [trial_num, model, self.desired_extremum]
         if acq_type == 'optimism':
-            pass # no extra arguments needed
+            pass  # no extra arguments needed
         elif acq_type == 'improvement':
             _, _, incumbent_cost = self.get_incumbent()
             acq_args.append(incumbent_cost)
         else:
             raise NotImplementedError('unsupported acquisition function type: {}'.format(acq_type))
-        return self.acq_func_factory(*acq_args)
+        return self.acquisition.construct_function(*acq_args)
 
     def _get_trial_type(self, trial_num):
         if trial_num < self.pre_phase_trials:
@@ -284,17 +337,17 @@ class Optimiser:
             self._notify('surrogate_fitted', trial_num)
 
             acq_fun, acq_info = self._get_acquisition_function(trial_num, model)
-            x, maximisation_info = self.maximise_acq(lb, acq_fun)
+            x, maximisation_info = self.aux_optimiser(lb, acq_fun)
             self._notify('acquisition_maximised', trial_num)
 
             selection_info.update({'model': model,
                                    'fitting_info': fitting_info,
-                                   'acq_info' : acq_info,
+                                   'acq_info': acq_info,
                                    'maximisation_info': maximisation_info})
 
             if self.fallback.point_too_close(x, X):
                 # keep the selection info from the Bayes selection
-                selection_info.update({'type': 'fallback', 'fallback_reason': 'too_close', 'bayes_x':x})
+                selection_info.update({'type': 'fallback', 'fallback_reason': 'too_close', 'bayes_x': x})
                 x = self.fallback.select_trial(self, trial_num)
 
         else:

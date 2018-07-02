@@ -1,0 +1,9 @@
+#!/bin/bash
+
+pytest --cov=turbo --cov-report html --profile
+
+# open the coverage report
+open htmlcov/index.html
+
+# open the profiler report
+snakeviz prof/combined.prof

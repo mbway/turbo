@@ -7,6 +7,7 @@ import turbo as tb
 import turbo.modules as tm
 from .config import Config
 
+
 def plot_surrogate_likelihood(rec, fig_ax=None):
     assert not rec.has_unfinished_trials()
     fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=Config.fig_sizes['overview'])
@@ -33,19 +34,19 @@ def plot_surrogate_hyper_params_1D(rec, param_index, trial_nums=None,
                                    use_param_bounds=False, size=25,
                                    axes=('trial_num', 'param', 'likelihood'),
                                    fig_ax=None, log_scale=False):
-    '''plot the surrogate hyperparameters for each of the given trials
+    """plot the surrogate hyperparameters for each of the given trials
 
     the scatter plot is colored based on the to the data log-likelihood of the model.
 
     Args:
-        rec (PlottingRecorder): the recorder which observed the run of an optimiser
+        rec (Recorder): the recorder which observed the run of an optimiser
         param_index: index into `Surrogate.get_hyper_params()` for the hyperparameter to use
         trial_nums (list): either a list of trial numbers to use for the plot, or None to use all of them
         use_param_bounds: whether to set the boundaries of the plot to match the boundaries of the hyperparameter space
         size (float): the size of the points of the scatter plot
         axes: the values to use for the (x, y, color) axes. each axis can be one of 'trial_num', 'param', 'likelihood'
         fig_ax: the matplotlib figure and axes to plot onto
-    '''
+    """
     assert not rec.has_unfinished_trials()
     fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=Config.fig_sizes['overview'])
     trial_nums = trial_nums or [t[0] for t in sorted(rec.trials.items())]
@@ -97,20 +98,20 @@ def plot_surrogate_hyper_params_1D(rec, param_index, trial_nums=None,
 def plot_surrogate_hyper_params_2D(rec, param_indices=(0, 1), trial_nums=None,
                                    size_limits=(5, 50), use_param_bounds=False,
                                    fig_ax=None, log_scale=False):
-    '''plot the surrogate hyperparameters for each of the given trials
+    """plot the surrogate hyperparameters for each of the given trials
 
     the scatter plot is colored based on the trial number and the sizes
     correspond to the data log-likelihood of the model.
 
     Args:
-        rec (PlottingRecorder): the recorder which observed the run of an optimiser
+        rec (Recorder): the recorder which observed the run of an optimiser
         param_indices: indices into `Surrogate.get_hyper_params()` for the hyperparameter to use for the x and y axes
         trial_nums (list): either a list of trial numbers to use for the plot, or None to use all of them
         size_limits: the (min, max) size to use for one of the points. set
             min=max to have every point the same size (don't size by likelihood)
         use_param_bounds: whether to set the boundaries of the plot to match the boundaries of the hyperparameter space
         fig_ax: the matplotlib figure and axes to plot onto
-    '''
+    """
     assert not rec.has_unfinished_trials()
     fig, ax = fig_ax if fig_ax is not None else plt.subplots(figsize=Config.fig_sizes['2D_surrogate'])
     x_param, y_param = param_indices

@@ -1,0 +1,23 @@
+# python 3.6 or later
+numpy
+scipy
+dill
+
+# One of:
+sklearn
+gpy
+
+# Optional:
+matplotlib
+pyqt5
+jupyter
+ipython
+ipywidgets
+seaborn  # for better looking matplotlib
+plotly  # for interactive 3D plots
+
+# testing
+pytest
+pytest-cov  # coverage
+pytest-profiling
+

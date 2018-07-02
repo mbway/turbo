@@ -19,7 +19,7 @@ from .config import Config
 
 
 #TODO: could use k-means to choose N locations to plot the surrogate through to get the best coverage of interesting regions while using as few plots as possible
-#TODO: plots could use PlottingRecorder.unfinished_trial_nums to ignore any unfinished trials. This would allow for running the optimiser in the background while plotting before the optimiser has finished.
+#TODO: plots could use Recorder.unfinished_trial_nums to ignore any unfinished trials. This would allow for running the optimiser in the background while plotting before the optimiser has finished.
 #TODO: color points by their trial number
 
 
@@ -55,7 +55,7 @@ def interactive_plot_trial_1D(rec, param=None, trial_num=None, plot_in_latent_sp
     param and trial_num can be left as None to be chosen interactively, or can be specified
 
     Args:
-        rec (PlottingRecorder): the recorder which observed the run of an optimiser
+        rec (Recorder): the recorder which observed the run of an optimiser
         param: None to be chosen interactively, or can be specified
         trial_num: None to be chosen interactively, or can be specified
         plot_in_latent_space: None to be chosen interactively, or can be specified
@@ -109,7 +109,7 @@ def interactive_plot_trial_2D(rec, x_param=None, y_param=None, trial_num=None, p
     param and trial_num can be left as None to be chosen interactively, or can be specified
 
     Args:
-        rec (PlottingRecorder): the recorder which observed the run of an optimiser
+        rec (Recorder): the recorder which observed the run of an optimiser
         x_param: None to be chosen interactively, or can be specified
         y_param: None to be chosen interactively, or can be specified
         trial_num: None to be chosen interactively, or can be specified
@@ -152,9 +152,9 @@ def interactive_plot_trial_2D(rec, x_param=None, y_param=None, trial_num=None, p
 
     # interactive is a widget, specifically a subclass of VBox
     controls = tg.widgets.interactive(update_plot,
-                                        x_param=x_param_w, y_param=y_param_w,
-                                        x_space=x_space_w, y_space=y_space_w,
-                                        trial_num=trial_num_w)
+                                      x_param=x_param_w, y_param=y_param_w,
+                                      x_space=x_space_w, y_space=y_space_w,
+                                      trial_num=trial_num_w)
     # interactively selecting latent space => need custom rows
     if plot_in_latent_space is None:
         output = controls.children[-1]
@@ -169,7 +169,7 @@ def interactive_plot_trial_2D(rec, x_param=None, y_param=None, trial_num=None, p
 
 
 class DecodedTrial:
-    ''' A utility for collecting data regarding a trial for use with plotting '''
+    """ A utility for collecting data regarding a trial for use with plotting """
     def __init__(self, trial_num, rec, plot_through):
         opt = rec.optimiser
         self.finished_trials, self.trial = rec.get_data_for_trial(trial_num)
@@ -199,7 +199,7 @@ class DecodedTrial:
 
         if len(self.finished_trials) > 0:
             costs = self.finished_costs
-            self.incumbent_index = np.argmax(costs) if opt.is_maximising() else np.argmin(costs)
+            self.incumbent_index = int(np.argmax(costs)) if opt.is_maximising() else int(np.argmin(costs))
             self.incumbent_mask = np.ones_like(costs, dtype=bool)
             self.incumbent_mask[self.incumbent_index] = False
 
@@ -223,8 +223,9 @@ class DecodedTrial:
             self.extra_text = ' (fallback, reason: {})'.format(self.fallback_reason)
             self.title_color = 'red'
 
+
 class DecodedParam:
-    '''A utility for collecting data regarding a single parameter for use with plotting
+    """A utility for collecting data regarding a single parameter for use with plotting
 
     Attributes:
         name: the name of the parameter (in the input space Bounds)
@@ -241,16 +242,16 @@ class DecodedParam:
             to the maximum of the bounds of this parameter in latent space,
             passing through the current trial.
         label: used to describe the parameter on an axis label
-    '''
+    """
     def __init__(self, param_name, rec, divisions, plot_in_latent_space, finished_xs, trial):
-        '''
+        """
         Args:
             param_name: the name of the parameter to decode the information for
             rec: the recorder to pull data from
             plot_in_latent_space: whether this parameter is to be plotted in latent or input space
             finished_xs: the input points for the finished trials (1D array)
             trial (Trial): the current trial
-        '''
+        """
         self._rec = rec
         self._plot_in_latent_space = plot_in_latent_space
 
@@ -297,11 +298,11 @@ class DecodedParam:
         points[:,self.latent_index] = latent_range
         return points
 
-
+#TODO: option to plot the acquisition function in the same plot as the GP prediction. Mainly applicable for UCB and TS
 def plot_trial_1D(rec, param, trial_num, true_objective=None,
                   plot_in_latent_space=True, divisions=200, n_sigma=2,
                   predict_through_all=True, plot_through='trial', ylim=None, fig=None):
-    r'''Plot the state of Bayesian optimisation (perturbed along a single
+    r"""Plot the state of Bayesian optimisation (perturbed along a single
     parameter) at the time that the given trial was starting its evaluation.
 
     The intuition for the case of a 1D space is trivial: the plot is simply the
@@ -313,7 +314,7 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
     dimension. The same holds for higher dimensions but is harder to visualise.
 
     Args:
-        rec (PlottingRecorder): the recorder which observed the run of an optimiser
+        rec (Recorder): the recorder which observed the run of an optimiser
         param (str): the name of the parameter to perturb to obtain the graph.
         trial_num (int): the number of the trial to plot.
             <0 => index from the end/last trial
@@ -345,17 +346,17 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
         ylim: when specified, set the limits of the y/cost axis to
             get a better detailed look at that range of values (optional)
         fig: the matplotlib figure to plot onto
-    '''
+    """
     # to catch errors where the user mistakes this for the interactive version
     assert param is not None and trial_num is not None, 'param and trial_num must be specified'
 
     assert not rec.has_unfinished_trials()
     opt = rec.optimiser
-    assert opt.async_eval is None, 'this function does not support asynchronous optimisation runs'
+    #assert opt.async_eval is None, 'this function does not support asynchronous optimisation runs'
     max_trial_num = max(rec.trials.keys())
     # allow negative trial numbers for referring to the end
     trial_num = max_trial_num+1 + trial_num if trial_num < 0 else trial_num
-    assert trial_num >= 0 and trial_num <= max_trial_num, 'invalid trial number'
+    assert 0 <= trial_num <= max_trial_num, 'invalid trial number'
 
     ################
     # Extract Data
@@ -369,7 +370,7 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
         # corresponding to the current trial.
         acq_through_trial = t.acq_fun(param.latent_line_through(t.trial.x))
         if n_sigma == 'beta':
-            assert isinstance(opt.acq_func_factory, tm.UCB.Factory), \
+            assert isinstance(opt.acquisition, tm.UCB), \
                 'n_sigma == "beta" only possible when using the UCB/LCB acquisition function'
             n_sigma = rec.trials[trial_num].selection_info['acq_info']['beta']
 
@@ -420,16 +421,16 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
     ##########
     if true_objective is not None:
         ax1.plot(param.plot_range, true_costs, '--', color='#2f2f2f',
-                label='true objective', linewidth=1.0, alpha=0.6)
+                 label='true objective', linewidth=1.0, alpha=0.6)
 
     # plot samples projected onto the `param` axis
     # exclude the incumbent since that is plotted separately
     if len(t.finished_trials) > 0:
         ax1.plot(np.vstack(param.finished_vals)[t.incumbent_mask,:], np.array(t.finished_costs)[t.incumbent_mask],
-                'o', markersize=6, label='finished trials', color=Config.trial_marker_colors['bayes'], zorder=5)
+                 'o', markersize=6, label='finished trials', color=Config.trial_marker_colors['bayes'], zorder=5)
 
         ax1.plot(param.finished_vals[t.incumbent_index], t.finished_costs[t.incumbent_index],
-                '*', markersize=10, color=Config.trial_marker_colors['incumbent'], zorder=10, markeredgewidth=0.5, markeredgecolor=Config.trial_edge_colors['incumbent'], label='incumbent')
+                 '*', markersize=10, color=Config.trial_marker_colors['incumbent'], zorder=10, markeredgewidth=0.5, markeredgecolor=Config.trial_edge_colors['incumbent'], label='incumbent')
 
     ax1.axvline(x=param.trial_val, linewidth=bar_width, color=bar_color)
     if t.is_fallback and t.fallback_reason == 'too_close':
@@ -450,7 +451,7 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
 
         ax1.plot(param.plot_range, mus, '-', color='#b055de', label=mu_label, alpha=mu_alpha, linewidth=1.0)
         ax1.fill_between(param.plot_range, mus - n_sigma*sigmas, mus + n_sigma*sigmas,
-                        alpha=sigma_alpha, color='#c465f3', label=sigma_label)
+                         alpha=sigma_alpha, color='#c465f3', label=sigma_label)
 
     #TODO: fit the view to the cost function, don't expand to fit in the uncertainty
 
@@ -472,19 +473,18 @@ def plot_trial_1D(rec, param, trial_num, true_objective=None,
     # Bottom Axes
     #############
     ax2.plot(param.plot_range, acq_through_trial, '-', color='g', linewidth=1.0,
-            label='acquisition function')
+             label='acquisition function')
     ax2.fill_between(param.plot_range, np.zeros_like(param.plot_range), acq_through_trial,
-                    alpha=0.3, color='palegreen')
+                     alpha=0.3, color='palegreen')
 
     ax2.axvline(x=param.trial_val, linewidth=bar_width, color=bar_color)
     if t.is_fallback and t.fallback_reason == 'too_close':
         ax2.axvline(x=bayes_val, linewidth=bar_width, color='orange')
         ax2.plot(bayes_val, t.acq_x, '^', color='orange',
-                markersize=7, zorder=10)
+                 markersize=7, zorder=10)
     elif t.is_bayes:
         ax2.plot(param.trial_val, t.acq_x, '^', color='black',
-                markersize=7, zorder=10, label='this trial')
-
+                 markersize=7, zorder=10, label='this trial')
 
     ax1.legend()
     ax2.legend()
@@ -555,7 +555,7 @@ def plot_trial_2D(rec, x_param, y_param, trial_num, true_objective=None,
 
     assert not rec.has_unfinished_trials()
     opt = rec.optimiser
-    assert opt.async_eval is None, 'this function does not support asynchronous optimisation runs'
+    #assert opt.async_eval is None, 'this function does not support asynchronous optimisation runs'
     max_trial_num = max(rec.trials.keys())
     # allow negative trial numbers for referring to the end
     trial_num = max_trial_num+1 + trial_num if trial_num < 0 else trial_num

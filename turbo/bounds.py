@@ -8,7 +8,7 @@ class Bounds:
         #TODO: check that min < max
         self.ordered = ordered
         self.params = set([b[0] for b in ordered])
-        self.associative = {b[0] : (b[1], b[2]) for b in ordered}
+        self.associative = {b[0]: (b[1], b[2]) for b in ordered}
 
     def __len__(self):
         return len(self.ordered)

@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-''' GUI utilities for use with Jupyter/IPython '''
+""" GUI utilities for use with Jupyter/IPython """
 
 try:
     from IPython import get_ipython
     from IPython.core.debugger import Pdb
-    from IPython.display import clear_output, display, Image, HTML, Javascript
+    from IPython.display import clear_output, display, Image, HTML, Javascript, Audio
     import ipywidgets as widgets
 except ImportError:
-    pass # Jupyter not installed
+    pass  # Jupyter not installed
 
 import io
-import matplotlib.pyplot as plt
-import threading
+import os
 import time
+import matplotlib.pyplot as plt
 
 # local imports
 import turbo.modules as tm
@@ -23,32 +23,43 @@ if in_jupyter():
     print('Setting up GUI for Jupyter')
     # hide scroll bars that sometimes appear (apparently by chance) because the
     # image fills the entire sub-area.
-    display(HTML('<style>div.output_subarea.output_png{'
-                 'overflow:hidden;width:100%;max-width:100%}</style>'))
-
+    style = HTML('''
+<style>
+div.output_subarea.output_png {
+    overflow:hidden;
+    width:100%;
+    max-width:100%;
+}
+audio {
+    display: none;
+}
+</style>''')
+    display(style)
 
 
 def jupyter_set_width(width):
-    '''set the width of the central element of the notebook
+    """set the width of the central element of the notebook
 
     Args:
         width (str): a css string to set the width to (eg "123px" or "90%" etc)
-    '''
+    """
     display(Javascript('document.getElementById("notebook-container").style.width = "{}"'.format(width)))
 
+
 def jupyter_set_trace():
-    '''
+    """
     Note: don't use this for code running directly in a cell, wrap the contents
         of the cell in a function first
 
     Note: once out of this function put a breakpoint on the line after it then
         continue to reach it, otherwise stepping with next leads deep into some
         system code which you don't care about.
-    '''
+    """
     Pdb.set_trace()
 
+
 def using_svg_backend():
-    '''
+    """
     using the following magic, Jupyter can be instructed to render matplotlib to
     svg for displaying. This has the advantage of more crisp images, however
     when rendering complex plots (such as a 2D heatmap) the resulting plot can
@@ -60,8 +71,9 @@ def using_svg_backend():
     Note:
         this detection method may not detect a global setting of this
         configuration option instead of through a magic. I haven't tested it.
-    '''
+    """
     return get_ipython().config['InlineBackend']['figure_format'] == 'svg'
+
 
 class LabelledProgressBar(widgets.IntProgress):
     def __init__(self, min, max, initial_value, label_prefix):
@@ -87,72 +99,79 @@ class LabelledProgressBar(widgets.IntProgress):
 
 
 class OptimiserProgressBar(tm.Listener):
-    def __init__(self, optimiser, close_when_complete=False, single_run=True):
-        '''
+    def __init__(self, optimiser, close_when_complete=False, sound_when_complete=True, single_run=True):
+        """
         display a progress bar in Jupyter as the optimiser runs, once the maximum
         number of iterations has been reached, stop watching.
 
         Args:
             optimiser (turbo.Optimiser): the optimiser to listen to
-            close_when_complete: whether to leave the progress bar in place or
+            close_when_complete (bool): whether to leave the progress bar in place or
                 delete it once the optimiser finishes.
+            sound_when_complete (bool): whether to play a 'done' sound when the progress bar completes
             single_run (bool): whether to unregister the listener after a single
                 run, or keep listening.
-        '''
+        """
         assert in_jupyter(), 'not running in Jupyter'
         self.close_when_complete = close_when_complete
+        self.sound_when_complete = sound_when_complete
         self.single_run = single_run
         self.opt = optimiser
         self.opt.register_listener(self)
+        self.bar = None
+
     def run_started(self, finished_trials, max_trials):
         this_run = max_trials - finished_trials
-        self.bar = LabelledProgressBar(0, this_run, initial_value=0,
-                                       label_prefix='Finished Trials: ')
+        self.bar = LabelledProgressBar(0, this_run, initial_value=0, label_prefix='Finished Trials: ')
+
     def evaluation_finished(self, trial_num, y, eval_info):
         self.bar.increment()
+
     def run_finished(self):
         if self.close_when_complete:
             self.bar.close()
+        if self.sound_when_complete:
+            play_done_sound()
         if self.single_run:
             self.opt.unregister_listener(self)
 
 
-
 def figure_to_Image(fig):
-    ''' save a matplotlib `Figure` as a Jupyter `Image` '''
+    """ save a matplotlib `Figure` as a Jupyter `Image` """
     img = io.BytesIO()
     # default dpi is 72
     fig.savefig(img, format='png', bbox_inches='tight', dpi=150)
     return Image(data=img.getvalue(), format='png', width='100%')
 
+
 class PlotMemoization:
-    '''A utility for memoising the results of a plotting function.
+    """A utility for memoising the results of a plotting function.
 
     This is useful when generating graphs interactively by changing some
     parameter, this class allows a more responsive UI if the particular
     parameter values have been encountered before.
 
-    '''
+    """
 
     def __init__(self, plot):
-        '''
+        """
         Args:
             plot (args -> matplotlib.figure.Figure): a function which takes some
                 parameters and optionally returns the plotted figure for
                 memoisation. If the function does not return a figure then the
                 current figure will be memoised instead.
-        '''
+        """
         # key : Image
         self.saved = {}
         self.plot = plot
 
     def show(self, key, args):
-        '''Show `plot(**args)` and store with the given key, displaying from memory if already computed
+        """Show `plot(**args)` and store with the given key, displaying from memory if already computed
 
         Args:
             key: a value to store the plot against
             args (dict): arguments to `self.plot`
-        '''
+        """
         if key not in self.saved:
             # if function returns None then use the current figure
             fig = self.plot(**args) or plt.gcf()
@@ -160,14 +179,14 @@ class PlotMemoization:
             plt.close(fig) # free resources
         display(self.saved[key])
 
-    def pre_compute(keys, args_list):
-        '''compute the plots for the given keys in one go so that they are all
+    def pre_compute(self, keys, args_list):
+        """compute the plots for the given keys in one go so that they are all
         stored in memory from then on.
 
         Args:
             keys: a list of keys to pre-compute
             args_list: a list of dictionaries corresponding to `keys`
-        '''
+        """
         bar = LabelledProgressBar(0, len(keys), initial_value=0)
         # plot each step (displaying the output) and save each figure
         for key, args in zip(keys, args_list):
@@ -179,49 +198,57 @@ class PlotMemoization:
         clear_output()
 
     def clear(self):
-        ''' delete the memoised plots '''
+        """ delete the memoised plots """
         self.saved.clear()
 
 
 def slider(values, function=None, description=None, initial=0):
-    '''A utility for easily setting up a Jupyter slider for items of a list
+    """A utility for easily setting up a Jupyter slider for items of a list
 
     Args:
         values (int or list): either a list of items for the slider value to
             correspond to, or an integer, in which case the values will be the
             range from 0 to `values`
-        function: (optional) a function which takes an item of `values` as an argument
+        function: (optional) a function which takes an item of `values` as an argument and is updated when the selection changes
         description (str): the description/label to apply to the slider
         initial (int): the index of the initial value
-    '''
+    """
     if isinstance(values, int):
         values = range(0, values)
     # allow negative indices e.g. values[-1]
     if initial < 0:
         initial = len(values)-initial
     # 100% width causes a scrollbar to appear since it is too wide for the output container
-    slider = widgets.IntSlider(value=initial, min=0, max=len(values)-1,
-                continuous_update=False, layout=widgets.Layout(width='98%'))
-    slider.description = description
+    s = widgets.IntSlider(value=initial, min=0, max=len(values)-1,
+                          continuous_update=False, layout=widgets.Layout(width='98%'))
+    s.description = description
     if function is not None:
         widgets.interact(lambda i: function(values[i]), i=slider)
-    return slider
+    return s
+
 
 def dropdown(values, function=None, description=None, initial=0):
-    '''A utility for easily setting up a Jupyer dropdown with the given values
+    """A utility for easily setting up a Jupyer dropdown with the given values
 
     Args:
         values: a list of the possible dropdown values
         function: (optional) a function which takes the current selected value as an argument
         description (str): the label to give to the dropdown
         initial (Int): an index into the values list to give initially
-    '''
-    dropdown = widgets.Dropdown(
+    """
+    d = widgets.Dropdown(
         options=values,
         value=values[initial],
         description=description
     )
     if function is not None:
-        widgets.interact(lambda val: function(val), val=dropdown)
-    return dropdown
+        widgets.interact(lambda val: function(val), val=d)
+    return d
 
+
+def play_done_sound():
+    gui_dir = os.path.dirname(__file__)
+    audio = Audio(filename=os.path.join(gui_dir, 'done.wav'), autoplay=True)
+    handle = display(audio, display_id='done_audio')
+    time.sleep(1)
+    handle.update(HTML(''))  # remove the player

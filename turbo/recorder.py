@@ -9,6 +9,7 @@ import turbo as tb
 import turbo.modules as tm
 
 #TODO: I have decided that pickling is a totally inappropriate serialisation method for this data for the following reasons (note them down in the documentation)
+# - from Gpy: Pickling is meant to serialize models within the same environment, and not to store models on disk to be used later on.
 # - if the code which created the optimiser changes (eg file deleted) then the pickled data CANNOT BE LOADED!
 #   as a fix, can use sys.modules['old_module'] = new_module
 #   if the module has moved and hasn't changed much
@@ -26,8 +27,7 @@ import turbo.modules as tm
 # could use dis to get the bytecode instead perhaps? Either way, save as something which can be re-loaded. Or perhaps pickle just the function stuff and store it as a string inside the JSON file or whatever
 
 
-#TODO: probably should move out of plotting and have it at the root called something else. Recorder or TrialRecorder or something?
-class PlottingRecorder(tm.Listener):
+class Recorder(tm.Listener):
     """ A listener which records data about the trials of an optimiser for plotting later
 
     Note: design justification: recorders are required because the optimiser
@@ -176,16 +176,16 @@ class PlottingRecorder(tm.Listener):
 
     def registered(self, optimiser):
         assert self.optimiser is None or self.optimiser == optimiser, \
-            'cannot use the same PlottingRecorder with multiple optimisers'
+            'cannot use the same Recorder with multiple optimisers'
         self.optimiser = optimiser
 
     def run_started(self, finished_trials, max_trials):
-        r = PlottingRecorder.Run(finished_trials, max_trials)
+        r = Recorder.Run(finished_trials, max_trials)
         self.runs.append(r)
 
     def selection_started(self, trial_num):
         assert trial_num not in self.trials.keys()
-        t = PlottingRecorder.Trial()
+        t = Recorder.Trial()
         t.trial_num = trial_num
         t.selection_time = time.time() # use as storage for the start time until selection has finished
         self.trials[trial_num] = t
@@ -249,7 +249,7 @@ class PlottingRecorder(tm.Listener):
     def get_acquisition_function(self, trial_num):
         """ see `Optimiser._get_acquisition_function()` """
         opt = self.optimiser
-        acq_type = opt.acq_func_factory.get_type()
+        acq_type = opt.acquisition.get_type()
         finished, t = self.get_data_for_trial(trial_num)
         assert 'model' in t.selection_info, 'the trial doesn\'t have a model'
         acq_args = [trial_num, t.selection_info['model'], opt.desired_extremum]
@@ -261,7 +261,7 @@ class PlottingRecorder(tm.Listener):
             acq_args.append(incumbent_cost)
         else:
             raise NotImplementedError('unsupported acquisition function type: {}'.format(acq_type))
-        acq_fun, acq_info = opt.acq_func_factory(*acq_args)
+        acq_fun, acq_info = opt.acquisition.construct_function(*acq_args)
         return acq_fun
 
     def remove_unfinished(self):

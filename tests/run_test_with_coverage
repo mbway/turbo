@@ -1,8 +1,0 @@
-#!/bin/bash
-
-coverage run --source=../turbo ./tests.py
-# text report to stdout
-#coverage report -m
-coverage html
-open htmlcov/index.html
-
